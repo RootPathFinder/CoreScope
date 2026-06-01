@@ -1314,3 +1314,12 @@
   margin: 0;
   padding: 0;
 }
+
+/* Hide all overlays during zoom for maximum smoothness */
+.leaflet-zoom-anim .leaflet-marker-pane,
+.leaflet-zoom-anim .leaflet-tooltip-pane,
+.leaflet-zoom-anim .leaflet-popup-pane,
+.leaflet-zoom-anim .leaflet-overlay-pane,
+.leaflet-zoom-anim .leaflet-liveAnimPane-pane {
+  display: none !important;
+}
