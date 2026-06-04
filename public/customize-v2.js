@@ -42,6 +42,7 @@
   var THEME_CSS_MAP = {
     accent: '--accent', accentHover: '--accent-hover',
     navBg: '--nav-bg', navBg2: '--nav-bg2', navText: '--nav-text', navTextMuted: '--nav-text-muted',
+    navActiveBg: '--nav-active-bg',
     background: '--surface-0', text: '--text', textMuted: '--text-muted', border: '--border',
     statusGreen: '--status-green', statusYellow: '--status-yellow', statusRed: '--status-red',
     surface1: '--surface-1', surface2: '--surface-2', surface3: '--surface-3',
@@ -109,7 +110,7 @@
       theme: {
         accent: '#4a9eff', navBg: '#0f0f23', navText: '#ffffff', background: '#f4f5f7', text: '#1a1a2e',
         statusGreen: '#22c55e', statusYellow: '#eab308', statusRed: '#ef4444',
-        accentHover: '#6db3ff', navBg2: '#1a1a2e', navTextMuted: '#cbd5e1', textMuted: '#5b6370', border: '#e2e5ea',
+        accentHover: '#6db3ff', navBg2: '#1a1a2e', navTextMuted: '#cbd5e1', navActiveBg: 'rgba(74,158,255,0.15)', textMuted: '#5b6370', border: '#e2e5ea',
         surface1: '#ffffff', surface2: '#ffffff', cardBg: '#ffffff', contentBg: '#f4f5f7',
         detailBg: '#ffffff', inputBg: '#ffffff', rowStripe: '#f9fafb', rowHover: '#eef2ff', selectedBg: '#dbeafe',
         surface3: '#ffffff', sectionBg: '#eef2ff'
@@ -117,7 +118,7 @@
       themeDark: {
         accent: '#4a9eff', navBg: '#0f0f23', navText: '#ffffff', background: '#0f0f23', text: '#e2e8f0',
         statusGreen: '#22c55e', statusYellow: '#eab308', statusRed: '#ef4444',
-        accentHover: '#6db3ff', navBg2: '#1a1a2e', navTextMuted: '#cbd5e1', textMuted: '#a8b8cc', border: '#334155',
+        accentHover: '#6db3ff', navBg2: '#1a1a2e', navTextMuted: '#cbd5e1', navActiveBg: 'rgba(74,158,255,0.18)', textMuted: '#a8b8cc', border: '#334155',
         surface1: '#1a1a2e', surface2: '#232340', cardBg: '#1a1a2e', contentBg: '#0f0f23',
         detailBg: '#232340', inputBg: '#1e1e34', rowStripe: '#1e1e34', rowHover: '#2d2d50', selectedBg: '#1e3a5f',
         surface3: '#2d2d50', sectionBg: '#1e1e34'
@@ -275,6 +276,7 @@
   var THEME_LABELS = {
     accent: 'Brand Color', accentHover: 'Accent Hover',
     navBg: 'Navigation', navBg2: 'Nav Gradient End', navText: 'Nav Text', navTextMuted: 'Nav Muted Text',
+    navActiveBg: 'Nav Active Pill',
     background: 'Background', text: 'Text', textMuted: 'Muted Text', border: 'Borders',
     statusGreen: 'Healthy', statusYellow: 'Warning', statusRed: 'Error',
     surface1: 'Cards', surface2: 'Panels', surface3: 'Tertiary Surface', sectionBg: 'Section Header', cardBg: 'Card Fill', contentBg: 'Content Area',
@@ -290,6 +292,7 @@
     statusGreen: 'Healthy/online indicators', statusYellow: 'Warning/degraded + hop conflicts',
     statusRed: 'Error/offline indicators', accentHover: 'Hover state for accent elements',
     navBg2: 'Darker end of nav gradient', navTextMuted: 'Inactive nav links, nav buttons',
+    navActiveBg: 'Background of the active nav link (current page pill)',
     textMuted: 'Labels, timestamps, secondary text', border: 'Dividers, table borders, card borders',
     surface1: 'Card and panel backgrounds', surface2: 'Nested surfaces, secondary panels',
     surface3: 'Tertiary surfaces, hover accents', sectionBg: 'Section header backgrounds',
@@ -321,7 +324,7 @@
   };
 
   var BASIC_KEYS = ['accent', 'navBg', 'navText', 'background', 'text', 'statusGreen', 'statusYellow', 'statusRed'];
-  var ADVANCED_KEYS = ['accentHover', 'navBg2', 'navTextMuted', 'textMuted', 'border', 'surface1', 'surface2', 'cardBg', 'contentBg', 'detailBg', 'inputBg', 'rowStripe', 'rowHover', 'selectedBg'];
+  var ADVANCED_KEYS = ['accentHover', 'navBg2', 'navTextMuted', 'navActiveBg', 'textMuted', 'border', 'surface1', 'surface2', 'cardBg', 'contentBg', 'detailBg', 'inputBg', 'rowStripe', 'rowHover', 'selectedBg'];
   var FONT_KEYS = ['font', 'mono'];
 
   // ── Validation helpers ──
@@ -1144,16 +1147,29 @@
     var effDark = eff.themeDark || {};
     for (var id in PRESETS) {
       var p = PRESETS[id];
+      var pTheme = p.theme || {};
+      var pDark = p.themeDark || {};
       var match = true;
       for (var i = 0; i < THEME_COLOR_KEYS.length && match; i++) {
         var k = THEME_COLOR_KEYS[i];
-        if (effTheme[k] !== (p.theme || {})[k] || effDark[k] !== (p.themeDark || {})[k]) match = false;
+        // An undefined value in the effective theme means the operator
+        // (and server config) has not customized this key — the preset's
+        // value will become effective via the CSS cascade, so it should
+        // match ANY preset value rather than invalidating the match.
+        // This keeps _detectActivePreset() correct as we add new themeable
+        // keys to PRESETS.default (e.g. navActiveBg in #1509).
+        if (effTheme[k] !== undefined && effTheme[k] !== pTheme[k]) match = false;
+        else if (effDark[k] !== undefined && effDark[k] !== pDark[k]) match = false;
       }
       if (match && p.nodeColors && eff.nodeColors) {
-        for (var nk in p.nodeColors) { if (eff.nodeColors[nk] !== p.nodeColors[nk]) { match = false; break; } }
+        for (var nk in p.nodeColors) {
+          if (eff.nodeColors[nk] !== undefined && eff.nodeColors[nk] !== p.nodeColors[nk]) { match = false; break; }
+        }
       }
       if (match && p.typeColors && eff.typeColors) {
-        for (var tk in p.typeColors) { if (eff.typeColors[tk] !== p.typeColors[tk]) { match = false; break; } }
+        for (var tk in p.typeColors) {
+          if (eff.typeColors[tk] !== undefined && eff.typeColors[tk] !== p.typeColors[tk]) { match = false; break; }
+        }
       }
       if (match) return id;
     }
@@ -2632,6 +2648,8 @@
     isOverridden: _isOverridden,
     // #1496 — full reset (not just STORAGE_KEY). See _resetAll() above.
     resetAll: _resetAll,
+    // Exposed for tests — see test-issue-1509-detect-preset.js.
+    detectActivePreset: _detectActivePreset,
     THEME_CSS_MAP: THEME_CSS_MAP
   };
 })();
