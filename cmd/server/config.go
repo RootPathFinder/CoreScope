@@ -76,6 +76,7 @@ type Config struct {
 
 	LiveMap struct {
 		PropagationBufferMs int `json:"propagationBufferMs"`
+		MaxNodes            int `json:"maxNodes"`
 	} `json:"liveMap"`
 
 	CacheTTL map[string]interface{} `json:"cacheTTL"`
@@ -579,6 +580,27 @@ func (c *Config) PropagationBufferMs() int {
 		return c.LiveMap.PropagationBufferMs
 	}
 	return 5000
+}
+
+// LiveMapMaxNodes returns the operator-configured cap on how many nodes
+// the live map fetches (and thus renders) in a single page. Default is
+// 2000; values are clamped to [100, 20000] to defang misconfig.
+// Negative/zero falls back to default. See #1574.
+func (c *Config) LiveMapMaxNodes() int {
+	const def = 2000
+	const min = 100
+	const max = 20000
+	if c == nil || c.LiveMap.MaxNodes <= 0 {
+		return def
+	}
+	v := c.LiveMap.MaxNodes
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+	return v
 }
 
 // blacklistSet lazily builds and caches the nodeBlacklist as a set for O(1) lookups.
