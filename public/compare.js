@@ -132,6 +132,13 @@ if (typeof window !== 'undefined') {
     routeFilter = 'all';
   }
 
+  // #1646 round-2 — single shared "should we run a comparison?" predicate
+  // used by every auto-run call site so guards cannot drift apart.
+  // URL-prepopulated ?a=X&b=X (same observer in both slots) returns false.
+  function isComparisonReady() {
+    return !!(selA && selB && selA !== selB);
+  }
+
   async function loadObservers() {
     try {
       var data = await api('/observers', { ttl: CLIENT_TTL.observers });
@@ -139,7 +146,7 @@ if (typeof window !== 'undefined') {
         return (a.name || a.id).localeCompare(b.name || b.id);
       });
       renderControls();
-      if (selA && selB) runComparison();
+      if (isComparisonReady()) runComparison();
     } catch (e) {
       document.getElementById('compareControls').innerHTML =
         '<div class="text-muted" style="padding:20px">Error loading observers: ' + escapeHtml(e.message) + '</div>';
@@ -161,14 +168,15 @@ if (typeof window !== 'undefined') {
       '<div class="compare-selector">' +
         '<div class="compare-select-group">' +
           '<label for="compareObsA">Observer A</label>' +
+          '<span class="compare-select-id" aria-hidden="true">A</span>' +
           '<select id="compareObsA" class="compare-select">' + optionsHtml + '</select>' +
         '</div>' +
         '<span class="compare-vs">vs</span>' +
         '<div class="compare-select-group">' +
           '<label for="compareObsB">Observer B</label>' +
+          '<span class="compare-select-id" aria-hidden="true">B</span>' +
           '<select id="compareObsB" class="compare-select">' + optionsHtml + '</select>' +
         '</div>' +
-        '<button id="compareBtn" class="compare-btn" disabled>Compare</button>' +
         '<div class="compare-select-group">' +
           '<label for="compareRouteFilter">Packet Type</label>' +
           '<select id="compareRouteFilter" class="compare-select">' +
@@ -181,7 +189,6 @@ if (typeof window !== 'undefined') {
 
     var ddA = document.getElementById('compareObsA');
     var ddB = document.getElementById('compareObsB');
-    var btn = document.getElementById('compareBtn');
 
     if (selA) ddA.value = selA;
     if (selB) ddB.value = selB;
@@ -193,15 +200,26 @@ if (typeof window !== 'undefined') {
       if (comparisonResult) runComparison();
     });
 
+    // #1646 — single source of truth for "should we run a comparison?".
+    // Called from change handlers and from the initial pre-populated
+    // path in loadObservers(). The picker collapse rule (.is-collapsed)
+    // is the ONLY DOM hook for state — no parallel data-collapsed attr.
     function updateBtn() {
       selA = ddA.value || null;
       selB = ddB.value || null;
-      btn.disabled = !selA || !selB || selA === selB;
+      var wrap = document.getElementById('compareControls');
+      var ready = isComparisonReady();
+      if (wrap) wrap.classList.toggle('is-collapsed', ready);
       renderBreadcrumbs();
     }
-    ddA.addEventListener('change', updateBtn);
-    ddB.addEventListener('change', updateBtn);
-    btn.addEventListener('click', function () { runComparison(); });
+    function onChange() {
+      updateBtn();
+      // change events only fire when value actually changes, so any
+      // ready transition that lands here came from a real user action.
+      if (isComparisonReady()) runComparison();
+    }
+    ddA.addEventListener('change', onChange);
+    ddB.addEventListener('change', onChange);
     updateBtn();
   }
 
@@ -322,25 +340,25 @@ if (typeof window !== 'undefined') {
     content.innerHTML =
       '<div class="compare-results">' +
         // Headline strip — A | shared | B above a single proportional bar.
-        // One row of large numbers + one shared-axis bar = the comparison
-        // in a single glance. Replaces three card-boxes that forced the
-        // eye to do mental subtraction.
+        // All three cells lead with their percentage so the row reads in
+        // one unit (Tufte: show data variation, not design variation).
+        // #1646
         '<section class="compare-strip" aria-label="Packet overlap summary">' +
           '<div class="compare-strip-row">' +
             '<div class="compare-strip-side" data-view="onlyA" role="button" tabindex="0" aria-label="Show only ' + nameA + ' packets">' +
               '<div class="compare-strip-name">' + nameA + '</div>' +
-              '<div class="compare-strip-count">' + stats.totalA.toLocaleString() + '</div>' +
-              '<div class="compare-strip-sub">' + r.onlyA.length.toLocaleString() + ' only here (' + pctA + '%)</div>' +
+              '<div class="compare-strip-side-pct">' + pctA + '<span class="compare-strip-side-pct-unit">%</span></div>' +
+              '<div class="compare-strip-sub">' + r.onlyA.length.toLocaleString() + ' only here</div>' +
             '</div>' +
             '<div class="compare-strip-mid" data-view="both" role="button" tabindex="0" aria-label="Show shared packets">' +
-              '<div class="compare-strip-mid-label">shared</div>' +
+              '<div class="compare-strip-mid-pct">' + pctBoth + '<span class="compare-strip-mid-pct-unit">%</span></div>' +
               '<div class="compare-strip-mid-count">' + r.both.length.toLocaleString() + '</div>' +
-              '<div class="compare-strip-sub">' + pctBoth + '% of all unique</div>' +
+              '<div class="compare-strip-mid-label">of all unique</div>' +
             '</div>' +
             '<div class="compare-strip-side compare-strip-side-b" data-view="onlyB" role="button" tabindex="0" aria-label="Show only ' + nameB + ' packets">' +
               '<div class="compare-strip-name">' + nameB + '</div>' +
-              '<div class="compare-strip-count">' + stats.totalB.toLocaleString() + '</div>' +
-              '<div class="compare-strip-sub">' + r.onlyB.length.toLocaleString() + ' only here (' + pctB + '%)</div>' +
+              '<div class="compare-strip-side-pct">' + pctB + '<span class="compare-strip-side-pct-unit">%</span></div>' +
+              '<div class="compare-strip-sub">' + r.onlyB.length.toLocaleString() + ' only here</div>' +
             '</div>' +
           '</div>' +
           // Single shared-axis diff bar. Width is exact proportion.

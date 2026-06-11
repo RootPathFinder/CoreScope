@@ -212,6 +212,7 @@
    When changing dark theme variables, update BOTH blocks below. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
+    color-scheme: dark;
     --status-green: #22c55e;
     --status-yellow: #eab308;
     --status-red: #ef4444;
@@ -244,6 +245,7 @@
 }
 /* ⚠️ DARK THEME VARIABLES — KEEP IN SYNC with @media block above */
 [data-theme="dark"] {
+  color-scheme: dark;
   /* Brighter link-strength hues for contrast on dark map tiles + surfaces. */
   --link-strong: #3fb950;
   --link-medium: #d29922;
@@ -399,7 +401,6 @@ button.ch-item {
 .ch-scroll-btn,
 .chooser-btn,
 .clock-filter-btn,
-.compare-btn,
 .copy-link-btn,
 .alab-btn {
   min-height: 48px;
@@ -421,7 +422,6 @@ button.ch-item {
 .ch-scroll-btn:active,
 .chooser-btn:active,
 .clock-filter-btn:active,
-.compare-btn:active,
 .copy-link-btn:active,
 .alab-btn:active {
   background: var(--row-hover);
@@ -448,6 +448,16 @@ input[type="week"] {
   min-height: 48px;
   box-sizing: border-box;
   touch-action: manipulation;
+}
+
+/* Theme the UA-native checkbox + radio so they pick up the page accent
+ * instead of rendering as bare white squares against the dark theme.
+ * Pairs with `color-scheme: dark` on the dark-theme rule so the box
+ * surround also re-skins. (Tufte #1646 — bare native widgets are
+ * chartjunk-by-omission: they advertise the chrome, not the data.) */
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--accent);
 }
 
 /* Visible :active states — touch devices have no hover, so :active is the
@@ -3411,7 +3421,14 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
  * diff-strip (Tufte's "show the data") makes the asymmetry
  * legible at a glance; the textual cards are demoted to subtext.
  */
-.compare-page { padding: var(--space-md); max-width: 1200px; margin: 0 auto; }
+.compare-page { padding: var(--space-md); max-width: 1200px; margin: 0 auto;
+  /* #1646 mobile: reserve space below the floating bottom-nav at ≤768px.
+   * --bottom-nav-reserve is 0px on desktop, 56px + safe-area on mobile,
+   * so this rule is a no-op for desktop and adds the exact clearance
+   * needed on phones — the Shared-Types pill row + tabs were getting
+   * eaten by the nav. (Tufte: don't reserve space we don't need.) */
+  padding-bottom: calc(var(--space-md) + var(--bottom-nav-reserve, 0px));
+}
 .compare-page .page-header {
   display: flex; align-items: center; justify-content: flex-start;
   gap: var(--space-sm); margin-bottom: var(--space-sm);
@@ -3433,6 +3450,17 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
   padding: var(--space-sm) var(--space-md);
   margin-bottom: var(--space-md);
 }
+/* Once both observers are picked, the headline strip below is the
+ * answer. Demote the picker: tighter padding, smaller labels.
+ * Operators can still swap A/B without leaving the page. The "A"/"B"
+ * referent stays visible (issue #1646 Tufte: erase labels, not
+ * referents). */
+.compare-controls.is-collapsed {
+  padding: 4px var(--space-md);
+}
+.compare-controls.is-collapsed .compare-select-group label { display: none; }
+.compare-controls.is-collapsed .compare-select { font-size: var(--fs-sm); padding: 4px 8px; }
+.compare-controls.is-collapsed .compare-select-id { display: inline-block; }
 .compare-selector {
   display: flex; align-items: flex-end; gap: var(--space-sm); flex-wrap: wrap;
 }
@@ -3441,6 +3469,14 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
   font-size: 10px; font-weight: 700; text-transform: uppercase;
   letter-spacing: 0.6px; color: var(--text-muted);
 }
+/* The "A" / "B" badge is hidden when the labels are visible (expanded
+ * state) and revealed when collapsed, so the dropdown row never loses
+ * its A/B referent. */
+.compare-select-id {
+  display: none;
+  font-size: 10px; font-weight: 700; color: var(--text-muted);
+  letter-spacing: 0.6px; padding: 2px 0;
+}
 .compare-select {
   padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm);
   background: var(--input-bg); color: var(--text); font-size: var(--fs-sm);
@@ -3448,19 +3484,16 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
 }
 .compare-select:focus { border-color: var(--accent); outline: none; }
 .compare-vs {
-  font-size: 12px; font-weight: 700; color: var(--text-muted);
-  text-transform: uppercase; letter-spacing: 1px;
-  padding: 0 4px 8px;
+  font-size: 10px; font-weight: 700; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 1.2px;
+  padding: 0 4px;
+  align-self: center;
+  opacity: 0.7;
 }
-/* Compare-now action — primary accent button, reuses .btn-primary visuals
- * but lives inside the controls strip with consistent height. */
-.compare-btn {
-  padding: 6px 14px; border: 1px solid var(--accent); border-radius: var(--radius-sm);
-  background: var(--accent); color: #fff; font-size: var(--fs-sm); font-weight: 700;
-  cursor: pointer; transition: background 120ms, opacity 120ms;
-}
-.compare-btn:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
-.compare-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+/* The Compare CTA was removed in #1646 — comparison auto-runs when
+ * both observers are chosen. The legacy .compare-btn touch-target
+ * declaration was deleted with it; surrounding form controls already
+ * carry their own 48px-min-height rule. */
 
 .compare-results { margin-top: var(--space-md); }
 
@@ -3488,10 +3521,16 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
   font-size: var(--fs-sm); font-weight: 700; color: var(--text);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.compare-strip-count {
+/* The side cells lead with the percentage, matching the middle cell
+ * (one unit across the row, no design variation — issue #1646). */
+.compare-strip-side-pct {
   font-family: var(--mono);
   font-size: var(--fs-xl); font-weight: 700;
   color: var(--text); font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.compare-strip-side-pct-unit {
+  font-size: 0.6em; margin-left: 1px;
 }
 .compare-strip-sub { font-size: 11px; color: var(--text-muted); }
 .compare-strip-mid {
@@ -3503,8 +3542,21 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
 }
 .compare-strip-mid-count {
   font-family: var(--mono);
+  font-size: var(--fs-sm); font-weight: 600;
+  color: var(--text); font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* The 79% gets the largest type — it IS the answer to "how much
+ * overlap?". The raw count and the label demote underneath. (Tufte:
+ * the most important number gets the most ink. Issue #1646.) */
+.compare-strip-mid-pct {
+  font-family: var(--mono);
   font-size: var(--fs-xl); font-weight: 700;
   color: var(--accent); font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.compare-strip-mid-pct-unit {
+  font-size: 0.6em; margin-left: 1px;
 }
 .compare-strip-mid-label {
   font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px;
@@ -3517,7 +3569,16 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
   display: flex; height: 10px; border-radius: 5px; overflow: hidden;
   background: var(--surface-2);
 }
-.compare-bar-seg { transition: width 240ms ease; }
+.compare-bar-seg {
+  transition: width 240ms ease;
+  /* #1646: Tufte/honesty — a 1–2% segment must still be visible or
+   * the chart is lying about presence. This is a *presence floor only*,
+   * not a perception-equivalent floor: 2px is the smallest pip the
+   * eye can reliably register on a 10px-tall bar without falsely
+   * equating a 1% and a 5% slice (which a 6px floor would do).
+   * Above ~2% the proportional encoding remains accurate. */
+  min-width: 2px;
+}
 .compare-bar-a    { background: var(--accent); }
 .compare-bar-both { background: var(--status-green); }
 .compare-bar-b    { background: var(--status-amber); }
@@ -3545,8 +3606,8 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
 .compare-asym-line {
   background: var(--surface-1);
   border: 1px solid var(--border);
-  border-left: 3px solid var(--accent);
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  border-left: none;
+  border-radius: var(--radius-sm);
   padding: var(--space-sm) var(--space-md);
   font-size: var(--fs-sm);
   color: var(--text-muted);
@@ -3563,8 +3624,8 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
 .compare-type-summary {
   background: var(--surface-1);
   border: 1px solid var(--border);
-  border-left: 3px solid var(--status-green);
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  border-left: none;
+  border-radius: var(--radius-sm);
   padding: var(--space-sm) var(--space-md);
   margin-bottom: var(--space-md);
   font-size: var(--fs-sm); color: var(--text);
@@ -3638,6 +3699,32 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
     border-top: 1px dashed var(--border); border-bottom: 1px dashed var(--border);
     padding: var(--space-sm) 0; flex-direction: row; gap: 6px; align-items: baseline; }
   .compare-asym { grid-template-columns: 1fr; }
+  /* #1646 mobile reflow: the asym sentence wraps mid-phrase at narrow
+   * widths ("3,262 of GY889 Repeater's 3,347 packets" splitting after
+   * "Repeater's"). text-wrap:pretty rebalances trailing words to
+   * avoid orphan-style breaks; overflow-wrap:anywhere lets very long
+   * node names yield instead of pushing the column. The percentage
+   * already lives on its own line (display:block), so the body is
+   * free to breathe. */
+  .compare-asym-line {
+    text-wrap: pretty;
+    overflow-wrap: anywhere;
+    word-break: normal;
+  }
+  /* #1646 mobile tabs: "Only N6IJ Repeater (675)" overruns the row at
+   * 375px; without min-width:0 a flex item can't shrink past its
+   * intrinsic content width. Allow each tab to shrink and ellipsis
+   * its label so all four fit. The count parenthetical stays
+   * visible because it's at the tail of the string. */
+  .compare-tabs .tab-btn {
+    min-width: 0;
+    flex: 0 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 50%;
+    padding: 6px 10px;
+  }
 }
 
 /* ── Observers page — compare-selection column + button hints ─── */
