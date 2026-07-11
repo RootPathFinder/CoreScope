@@ -595,6 +595,13 @@ jobs:
           echo "app_version=$APP_VERSION" >> "$GITHUB_OUTPUT"
           echo "Build: version=$APP_VERSION commit=$GIT_COMMIT time=$BUILD_TIME"
 
+      - name: Compute GHCR image repository
+        id: image
+        run: |
+          IMAGE_REPO="ghcr.io/$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          echo "image_repo=$IMAGE_REPO" >> "$GITHUB_OUTPUT"
+          echo "GHCR image repository: $IMAGE_REPO"
+
       - name: Build Go Docker image (local staging)
         run: |
           GIT_COMMIT="${{ steps.meta.outputs.git_commit }}" \
@@ -624,7 +631,7 @@ jobs:
         id: docker-meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/kpa-clawbot/corescope
+          images: ${{ steps.image.outputs.image_repo }}
           tags: |
             type=semver,pattern=v{{version}}
             type=semver,pattern=v{{major}}.{{minor}}
@@ -700,9 +707,10 @@ jobs:
 
       - name: Pull latest image from GHCR
         run: |
+          IMAGE_REPO="ghcr.io/$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
           # Try to pull the edge image from GHCR and tag for docker-compose compatibility
-          if docker pull ghcr.io/kpa-clawbot/corescope:edge; then
-            docker tag ghcr.io/kpa-clawbot/corescope:edge corescope-go:latest
+          if docker pull "${IMAGE_REPO}:edge"; then
+            docker tag "${IMAGE_REPO}:edge" corescope-go:latest
             echo "Pulled and tagged GHCR edge image ✅"
           else
             echo "⚠️ GHCR pull failed — falling back to locally built image"
