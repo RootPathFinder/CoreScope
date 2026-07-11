@@ -53,7 +53,9 @@ func TestReleaseFastPathWorkflowExists(t *testing.T) {
 	required := []string{
 		"imjasonh/setup-crane",                  // crane install action
 		"org.opencontainers.image.revision",     // label inspected on :edge
-		"ghcr.io/kpa-clawbot/corescope",         // image ref
+		"GITHUB_REPOSITORY",                     // dynamic repo context
+		"tr '[:upper:]' '[:lower:]'",            // GHCR lower-case normalization
+		"steps.image.outputs.image_repo",        // image ref passed between steps
 		":edge",                                 // source tag we copy from
 		"crane tag",                             // metadata-only retag
 		"workflow run deploy.yml",               // fallback dispatch

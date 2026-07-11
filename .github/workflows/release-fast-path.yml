@@ -34,6 +34,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Compute GHCR image repository
+        id: image
+        run: |
+          IMAGE_REPO="ghcr.io/$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          echo "image_repo=$IMAGE_REPO" >> "$GITHUB_OUTPUT"
+          echo "GHCR image repository: $IMAGE_REPO"
+
       - name: Install crane
         uses: imjasonh/setup-crane@v0.4
 
@@ -60,7 +67,7 @@ jobs:
         id: edge
         run: |
           set -euo pipefail
-          IMAGE="ghcr.io/kpa-clawbot/corescope"
+          IMAGE="${{ steps.image.outputs.image_repo }}"
           EDGE_REF="${IMAGE}:edge"
           # crane config returns the OCI image config JSON; the revision label
           # is set by docker/metadata-action on the master-edge build.
@@ -83,7 +90,7 @@ jobs:
         if: steps.edge.outputs.no_edge == 'false' && steps.edge.outputs.edge_revision == github.sha
         run: |
           set -euo pipefail
-          IMAGE="ghcr.io/kpa-clawbot/corescope"
+          IMAGE="${{ steps.image.outputs.image_repo }}"
           SRC="${IMAGE}:edge"
           echo "SHA match — fast-path re-tag from $SRC"
           for NEW_TAG in \

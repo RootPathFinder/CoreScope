@@ -2,6 +2,20 @@
 
 Pre-built images are published to GHCR for `linux/amd64` and `linux/arm64` (Raspberry Pi 4/5).
 
+## Using this repository from your own fork
+
+The CI workflow publishes images to the GHCR package that matches the repository slug:
+
+- Repository: `github.com/<owner>/<repo>`
+- Image: `ghcr.io/<owner>/<repo>` (lower-cased)
+
+Examples:
+
+- `github.com/acme/CoreScope` → `ghcr.io/acme/corescope`
+- `github.com/YourOrg/mesh-analyzer` → `ghcr.io/yourorg/mesh-analyzer`
+
+If the package is private, configure Portainer to use a GitHub Container Registry credential with `read:packages` scope.
+
 ## Quick Start
 
 ### Docker run
@@ -23,6 +37,50 @@ curl -sL https://raw.githubusercontent.com/Kpa-clawbot/CoreScope/master/docker-c
   -o docker-compose.yml
 docker compose up -d
 ```
+
+### Portainer stack (external MQTT broker, no built-in Caddy/Mosquitto)
+
+Use this as a baseline when CoreScope should connect to an existing MQTT broker on a shared Docker network.
+
+```yaml
+services:
+  corescope:
+    image: ghcr.io/<owner>/<repo>:vX.Y.Z
+    container_name: corescope
+    restart: unless-stopped
+    ports:
+      - "8080:3000"
+    environment:
+      - DISABLE_MOSQUITTO=true
+      - DISABLE_CADDY=true
+    networks:
+      - default
+      - mqtt_default
+    entrypoint:
+      - sh
+      - -c
+      - |
+        mkdir -p /app/data
+        if [ ! -f /app/data/config.json ]; then
+          cp /app/config.example.json /app/data/config.json
+        fi
+        exec /entrypoint.sh
+    volumes:
+      - corescope_data:/app/data
+
+networks:
+  mqtt_default:
+    external: true
+
+volumes:
+  corescope_data:
+```
+
+Recommended image strategy for Portainer:
+
+- Production: pin to `vX.Y.Z` and update intentionally
+- Validation/staging: use `edge`
+- Avoid `latest` when reproducibility matters
 
 ## Image Tags
 
