@@ -60,6 +60,7 @@
     { route: 'nodes',     hash: '#/nodes',     label: 'Nodes',     ph: 'monitor' },
     { route: 'tools',     hash: '#/tools',     label: 'Tools',     ph: 'wrench' },
     { route: 'observers', hash: '#/observers', label: 'Observers', ph: 'eye' },
+    { route: 'repeaters', hash: '#/repeaters', label: 'Repeaters', ph: 'broadcast' },
     { route: 'analytics', hash: '#/analytics', label: 'Analytics', ph: 'chart-bar' },
     { route: 'perf',      hash: '#/perf',      label: 'Perf',      ph: 'lightning' },
     { route: 'audio-lab', hash: '#/audio-lab', label: 'Audio Lab', ph: 'music-note' },

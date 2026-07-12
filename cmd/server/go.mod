@@ -34,6 +34,10 @@ require github.com/meshcore-analyzer/lora v0.0.0
 
 replace github.com/meshcore-analyzer/lora => ../../internal/lora
 
+require github.com/meshcore-analyzer/repeatervault v0.0.0
+
+replace github.com/meshcore-analyzer/repeatervault => ../../internal/repeatervault
+
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect

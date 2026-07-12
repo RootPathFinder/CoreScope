@@ -12,6 +12,8 @@
     "/api/dropped-packets",
     "/api/healthz",
     "/api/known-channels",
+    "/api/managed-repeaters",
+    "/api/managed-repeaters/{id}",
     "/api/nodes/clock-skew",
     "/api/nodes/resolve",
     "/api/nodes/{pubkey}/battery",

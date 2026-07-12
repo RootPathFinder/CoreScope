@@ -16,6 +16,18 @@ Examples:
 
 If the package is private, configure Portainer to use a GitHub Container Registry credential with `read:packages` scope.
 
+## Managed repeaters (admin password vault)
+
+CoreScope can store admin credentials for remote MeshCore repeaters (Milestone 1 of active telemetry). Passwords are encrypted at rest under `/app/data/managed-repeaters.json` and are never returned by the API.
+
+Requirements:
+
+- Set a strong `apiKey` in `config.json` (required for vault API access)
+- Optional: set `CORESCOPE_VAULT_KEY` (preferred dedicated vault key). If unset, the vault key is derived from `apiKey`
+- UI: `#/repeaters` (also in nav More sheet)
+
+Outbound RF polling still needs a local USB companion (Milestone 2) — this milestone only stores credentials securely.
+
 ## Quick Start
 
 ### Docker run
