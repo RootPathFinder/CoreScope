@@ -60,24 +60,24 @@ func TestParseRepeaterStatsTagged(t *testing.T) {
 	// 4-byte tag + 56-byte stats
 	raw := make([]byte, 4+56)
 	binary.LittleEndian.PutUint32(raw[0:4], 0x11223344)
-	binary.LittleEndian.PutUint16(raw[4:6], 3710)       // battery
-	binary.LittleEndian.PutUint16(raw[6:8], 2)          // queue
-	binary.LittleEndian.PutUint16(raw[8:10], 0xFF9C)    // noise -100 as uint16 bits of int16
-	binary.LittleEndian.PutUint16(raw[10:12], 0xFFCE)   // rssi -50
-	binary.LittleEndian.PutUint32(raw[12:16], 100)      // recv
-	binary.LittleEndian.PutUint32(raw[16:20], 50)       // sent
-	binary.LittleEndian.PutUint32(raw[20:24], 10)       // airtime
-	binary.LittleEndian.PutUint32(raw[24:28], 3600)     // uptime
-	binary.LittleEndian.PutUint32(raw[28:32], 1)        // sent flood
-	binary.LittleEndian.PutUint32(raw[32:36], 2)        // sent direct
-	binary.LittleEndian.PutUint32(raw[36:40], 3)        // recv flood
-	binary.LittleEndian.PutUint32(raw[40:44], 4)        // recv direct
-	binary.LittleEndian.PutUint16(raw[44:46], 0)        // err events
-	binary.LittleEndian.PutUint16(raw[46:48], 20)       // snr*4 = 5.0
-	binary.LittleEndian.PutUint16(raw[48:50], 0)        // direct dups
-	binary.LittleEndian.PutUint16(raw[50:52], 0)        // flood dups
-	binary.LittleEndian.PutUint32(raw[52:56], 7)        // rx airtime
-	binary.LittleEndian.PutUint32(raw[56:60], 9)        // recv errors
+	binary.LittleEndian.PutUint16(raw[4:6], 3710)     // battery
+	binary.LittleEndian.PutUint16(raw[6:8], 2)        // queue
+	binary.LittleEndian.PutUint16(raw[8:10], 0xFF9C)  // noise -100 as uint16 bits of int16
+	binary.LittleEndian.PutUint16(raw[10:12], 0xFFCE) // rssi -50
+	binary.LittleEndian.PutUint32(raw[12:16], 100)    // recv
+	binary.LittleEndian.PutUint32(raw[16:20], 50)     // sent
+	binary.LittleEndian.PutUint32(raw[20:24], 10)     // airtime
+	binary.LittleEndian.PutUint32(raw[24:28], 3600)   // uptime
+	binary.LittleEndian.PutUint32(raw[28:32], 1)      // sent flood
+	binary.LittleEndian.PutUint32(raw[32:36], 2)      // sent direct
+	binary.LittleEndian.PutUint32(raw[36:40], 3)      // recv flood
+	binary.LittleEndian.PutUint32(raw[40:44], 4)      // recv direct
+	binary.LittleEndian.PutUint16(raw[44:46], 0)      // err events
+	binary.LittleEndian.PutUint16(raw[46:48], 20)     // snr*4 = 5.0
+	binary.LittleEndian.PutUint16(raw[48:50], 0)      // direct dups
+	binary.LittleEndian.PutUint16(raw[50:52], 0)      // flood dups
+	binary.LittleEndian.PutUint32(raw[52:56], 7)      // rx airtime
+	binary.LittleEndian.PutUint32(raw[56:60], 9)      // recv errors
 
 	stats, err := ParseRepeaterStats(raw)
 	if err != nil {
@@ -471,7 +471,7 @@ func TestParseSelfInfo(t *testing.T) {
 	if s.PublicKey != hex.EncodeToString(pk) || s.NodeName != "MyNode" {
 		t.Fatalf("self id=%+v", s)
 	}
-	if s.FreqHz != 915000000 || s.BandwidthK != 250000 || s.SF != 11 || s.CR != 5 {
+	if s.FreqKHz != 915000000 || s.BandwidthHz != 250000 || s.SF != 11 || s.CR != 5 {
 		t.Fatalf("self radio=%+v", s)
 	}
 }
@@ -528,10 +528,10 @@ func TestClientDiagnosticMethods(t *testing.T) {
 	binary.LittleEndian.PutUint16(batt[1:3], 3700)
 
 	port := &scriptedPort{reads: [][][]byte{
-		{self},          // AppStartInfo
-		{dev},           // QueryDeviceInfo
-		{batt},          // GetBattStorage
-		{{RespOK}},      // SendSelfAdvert (zero-hop)
+		{self},     // AppStartInfo
+		{dev},      // QueryDeviceInfo
+		{batt},     // GetBattStorage
+		{{RespOK}}, // SendSelfAdvert (zero-hop)
 	}}
 	c := NewClient(port, "diag")
 
@@ -559,6 +559,93 @@ func TestClientSendSelfAdvertError(t *testing.T) {
 	}}
 	c := NewClient(port, "diag")
 	if err := c.SendSelfAdvert(false, time.Second); err == nil {
+		t.Fatal("expected error from RESP_CODE_ERR")
+	}
+}
+
+func TestBuildSetRadioParams(t *testing.T) {
+	// US/Canada recommended: 910.525 MHz, BW 62.5 kHz, SF 7, CR 5
+	p := RadioParams{FreqKHz: 910525, BandwidthHz: 62500, SF: 7, CR: 5}
+	frame, err := BuildSetRadioParams(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(frame) != 11 || frame[0] != CmdSetRadioParams {
+		t.Fatalf("frame=%x", frame)
+	}
+	if binary.LittleEndian.Uint32(frame[1:5]) != 910525 {
+		t.Fatalf("freq=%d", binary.LittleEndian.Uint32(frame[1:5]))
+	}
+	if binary.LittleEndian.Uint32(frame[5:9]) != 62500 {
+		t.Fatalf("bw=%d", binary.LittleEndian.Uint32(frame[5:9]))
+	}
+	if frame[9] != 7 || frame[10] != 5 {
+		t.Fatalf("sf/cr=%d %d", frame[9], frame[10])
+	}
+}
+
+func TestValidateRadioParams(t *testing.T) {
+	ok := RadioParams{FreqKHz: 869525, BandwidthHz: 250000, SF: 11, CR: 5}
+	if err := ValidateRadioParams(ok); err != nil {
+		t.Fatalf("valid params rejected: %v", err)
+	}
+	bad := []RadioParams{
+		{FreqKHz: 1000, BandwidthHz: 250000, SF: 11, CR: 5},    // freq too low
+		{FreqKHz: 3000000, BandwidthHz: 250000, SF: 11, CR: 5}, // freq too high
+		{FreqKHz: 869525, BandwidthHz: 100, SF: 11, CR: 5},     // bw too low
+		{FreqKHz: 869525, BandwidthHz: 999999, SF: 11, CR: 5},  // bw too high
+		{FreqKHz: 869525, BandwidthHz: 250000, SF: 4, CR: 5},   // sf too low
+		{FreqKHz: 869525, BandwidthHz: 250000, SF: 13, CR: 5},  // sf too high
+		{FreqKHz: 869525, BandwidthHz: 250000, SF: 11, CR: 4},  // cr too low
+		{FreqKHz: 869525, BandwidthHz: 250000, SF: 11, CR: 9},  // cr too high
+	}
+	for i, p := range bad {
+		if err := ValidateRadioParams(p); err == nil {
+			t.Fatalf("bad params[%d] accepted: %+v", i, p)
+		}
+		if _, err := BuildSetRadioParams(p); err == nil {
+			t.Fatalf("BuildSetRadioParams[%d] accepted bad: %+v", i, p)
+		}
+	}
+}
+
+func TestBuildSetTxPower(t *testing.T) {
+	frame, err := BuildSetTxPower(22)
+	if err != nil || len(frame) != 2 || frame[0] != CmdSetRadioTxPower || int8(frame[1]) != 22 {
+		t.Fatalf("frame=%x err=%v", frame, err)
+	}
+	neg, err := BuildSetTxPower(-9)
+	if err != nil || int8(neg[1]) != -9 {
+		t.Fatalf("neg=%x err=%v", neg, err)
+	}
+	if _, err := BuildSetTxPower(-10); err == nil {
+		t.Fatal("expected reject below -9")
+	}
+	if _, err := BuildSetTxPower(31); err == nil {
+		t.Fatal("expected reject above 30")
+	}
+}
+
+func TestClientSetRadioAndTxPower(t *testing.T) {
+	port := &scriptedPort{reads: [][][]byte{
+		{{RespOK}}, // SetRadioParams
+		{{RespOK}}, // SetTxPower
+	}}
+	c := NewClient(port, "cfg")
+	if err := c.SetRadioParams(RadioParams{FreqKHz: 910525, BandwidthHz: 62500, SF: 7, CR: 5}, time.Second); err != nil {
+		t.Fatalf("SetRadioParams: %v", err)
+	}
+	if err := c.SetTxPower(20, time.Second); err != nil {
+		t.Fatalf("SetTxPower: %v", err)
+	}
+}
+
+func TestClientSetRadioParamsError(t *testing.T) {
+	port := &scriptedPort{reads: [][][]byte{
+		{{RespError, 0x03}}, // ERR_CODE_ILLEGAL_ARG
+	}}
+	c := NewClient(port, "cfg")
+	if err := c.SetRadioParams(RadioParams{FreqKHz: 910525, BandwidthHz: 62500, SF: 7, CR: 5}, time.Second); err == nil {
 		t.Fatal("expected error from RESP_CODE_ERR")
 	}
 }

@@ -118,6 +118,43 @@ func (c *Client) SendSelfAdvert(flood bool, timeout time.Duration) error {
 	return err
 }
 
+// SetRadioParams writes CMD_SET_RADIO_PARAMS (freq/bw/sf/cr) and waits for
+// RESP_CODE_OK. The companion applies the change live (no reboot over serial).
+func (c *Client) SetRadioParams(p RadioParams, timeout time.Duration) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	frame, err := BuildSetRadioParams(p)
+	if err != nil {
+		return err
+	}
+	if err := WriteFrame(c.port, frame); err != nil {
+		return err
+	}
+	_, err = c.awaitResp(RespOK, timeout)
+	return err
+}
+
+// SetTxPower writes CMD_SET_RADIO_TX_POWER and waits for RESP_CODE_OK.
+func (c *Client) SetTxPower(dbm int8, timeout time.Duration) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	frame, err := BuildSetTxPower(dbm)
+	if err != nil {
+		return err
+	}
+	if err := WriteFrame(c.port, frame); err != nil {
+		return err
+	}
+	_, err = c.awaitResp(RespOK, timeout)
+	return err
+}
+
 // awaitResp reads frames until one matches want, mapping RESP_CODE_ERR to an
 // error and skipping unsolicited pushes. Caller must hold c.mu.
 func (c *Client) awaitResp(want byte, timeout time.Duration) ([]byte, error) {

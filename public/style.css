@@ -5661,3 +5661,23 @@ body.embed #app.app-fixed {
 .managed-repeaters-page .mr-step-bad { color: var(--status-red, #b54a4a); }
 .managed-repeaters-page .mr-diag-err { margin-top: 0.4rem; }
 
+.managed-repeaters-page .mr-radio-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 0.6rem; margin: 0.5rem 0 0.75rem;
+}
+.managed-repeaters-page .mr-radio-grid label {
+  display: flex; flex-direction: column; gap: 0.2rem;
+  font-size: 0.8rem; color: var(--text-muted, #6b7280);
+}
+.managed-repeaters-page .mr-radio-grid input {
+  padding: 0.3rem 0.4rem; border: 1px solid var(--border); border-radius: 4px;
+  background: var(--bg, #fff); color: var(--text, #222);
+}
+.managed-repeaters-page .mr-radio-grid input:read-only { opacity: 0.7; }
+.managed-repeaters-page #mr-region {
+  padding: 0.3rem 0.4rem; border: 1px solid var(--border); border-radius: 4px;
+  background: var(--bg, #fff); color: var(--text, #222); max-width: 100%;
+}
+.managed-repeaters-page .mr-config-result { margin-top: 0.75rem; }
+

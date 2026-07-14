@@ -44,6 +44,13 @@ assert.ok(src.includes('mode=advert') || src.includes("'advert'"), 'UI sends adv
 assert.ok(src.includes('renderTestResult'), 'UI renders diagnostic result panel');
 assert.ok(src.includes('mr-diag-steps'), 'UI renders per-step diagnostic trace');
 assert.ok(src.includes('firmwareVersion'), 'UI surfaces device firmware version');
+assert.ok(src.includes('/api/companion/config'), 'UI calls companion radio-config API');
+assert.ok(src.includes('REGION_PRESETS'), 'UI defines region presets');
+assert.ok(src.includes('910.525'), 'UI has US recommended preset frequency');
+assert.ok(src.includes('freqKHz') && src.includes('bandwidthHz'), 'UI sends wire-unit radio params');
+assert.ok(src.includes('onApplyRadio'), 'UI wires radio apply handler');
+assert.ok(src.includes('renderConfigResult'), 'UI renders config verification result');
+assert.ok(src.includes('r.self.freqKHz'), 'UI freq display uses corrected kHz units (not freqHz)');
 assert.ok(src.includes('CMD_SEND_LOGIN') === false, 'no protocol constants leaked into UI');
 assert.ok(src.includes('companion-poller'), 'UI mentions companion poller');
 

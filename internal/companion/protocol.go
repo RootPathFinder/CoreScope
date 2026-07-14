@@ -16,12 +16,14 @@ const (
 	CmdGetContacts      byte = 0x04
 	CmdSendSelfAdvert   byte = 0x07 // CMD_SEND_SELF_ADVERT (byte1: 1=flood, 0/absent=zero-hop)
 	CmdAddUpdateContact byte = 0x09
+	CmdSetRadioParams   byte = 0x0B // CMD_SET_RADIO_PARAMS (freq/bw/sf/cr)
+	CmdSetRadioTxPower  byte = 0x0C // CMD_SET_RADIO_TX_POWER (int8 dBm)
 	CmdGetBattStorage   byte = 0x14 // CMD_GET_BATT_AND_STORAGE
 	CmdDeviceQuery      byte = 0x16
-	CmdSendLogin     byte = 0x1A
-	CmdSendStatusReq byte = 0x1B
-	CmdLogout        byte = 0x1D
-	CmdSendTelemetry byte = 0x27
+	CmdSendLogin        byte = 0x1A
+	CmdSendStatusReq    byte = 0x1B
+	CmdLogout           byte = 0x1D
+	CmdSendTelemetry    byte = 0x27
 
 	RespOK            byte = 0x00
 	RespError         byte = 0x01
@@ -58,11 +60,12 @@ const (
 )
 
 var (
-	ErrNotFound     = errors.New("contact not found on companion")
-	ErrLoginFailed  = errors.New("repeater login failed or timed out")
-	ErrBadPubkey    = errors.New("public key must be 64 hex chars (32 bytes)")
-	ErrPasswordLong = errors.New("admin password exceeds 15-byte companion limit")
-	ErrProtocol     = errors.New("unexpected companion response")
+	ErrNotFound       = errors.New("contact not found on companion")
+	ErrLoginFailed    = errors.New("repeater login failed or timed out")
+	ErrBadPubkey      = errors.New("public key must be 64 hex chars (32 bytes)")
+	ErrPasswordLong   = errors.New("admin password exceeds 15-byte companion limit")
+	ErrProtocol       = errors.New("unexpected companion response")
+	ErrBadRadioParams = errors.New("invalid radio parameters")
 	// ErrDisconnected means the USB CDC link dropped mid-command (often RF TX brownout).
 	ErrDisconnected = errors.New("companion serial disconnected")
 )
@@ -186,16 +189,17 @@ func ParseDeviceInfo(frame []byte) (DeviceInfo, error) {
 
 // SelfInfo is the parsed RESP_CODE_SELF_INFO (reply to CMD_APP_START). It carries
 // the node's own public key, name and radio params as reported by the device.
+// Firmware emits freq as MHz×1000 (kHz) and bw as kHz×1000 (Hz) — see MyMesh.cpp.
 type SelfInfo struct {
-	AdvType    uint8  `json:"advType"`
-	TxPower    uint8  `json:"txPower"`
-	MaxTxPower uint8  `json:"maxTxPower"`
-	PublicKey  string `json:"publicKey"`
-	FreqHz     uint32 `json:"freqHz,omitempty"`
-	BandwidthK uint32 `json:"bandwidthK,omitempty"`
-	SF         uint8  `json:"sf,omitempty"`
-	CR         uint8  `json:"cr,omitempty"`
-	NodeName   string `json:"nodeName,omitempty"`
+	AdvType     uint8  `json:"advType"`
+	TxPower     uint8  `json:"txPower"`
+	MaxTxPower  uint8  `json:"maxTxPower"`
+	PublicKey   string `json:"publicKey"`
+	FreqKHz     uint32 `json:"freqKHz,omitempty"`     // frequency in kHz (910525 = 910.525 MHz)
+	BandwidthHz uint32 `json:"bandwidthHz,omitempty"` // bandwidth in Hz (250000 = 250 kHz)
+	SF          uint8  `json:"sf,omitempty"`
+	CR          uint8  `json:"cr,omitempty"`
+	NodeName    string `json:"nodeName,omitempty"`
 }
 
 // ParseSelfInfo parses RESP_CODE_SELF_INFO. Layout (companion firmware):
@@ -215,8 +219,8 @@ func ParseSelfInfo(frame []byte) (SelfInfo, error) {
 	// After pubkey(32): lat(4)+lon(4)+multi_acks+advert_loc_policy+telemetry+manual_add = 12
 	radioOff := 4 + PubKeySize + 12
 	if len(frame) >= radioOff+10 {
-		s.FreqHz = binary.LittleEndian.Uint32(frame[radioOff : radioOff+4])
-		s.BandwidthK = binary.LittleEndian.Uint32(frame[radioOff+4 : radioOff+8])
+		s.FreqKHz = binary.LittleEndian.Uint32(frame[radioOff : radioOff+4])
+		s.BandwidthHz = binary.LittleEndian.Uint32(frame[radioOff+4 : radioOff+8])
 		s.SF = frame[radioOff+8]
 		s.CR = frame[radioOff+9]
 		if len(frame) > radioOff+10 {
@@ -224,6 +228,59 @@ func ParseSelfInfo(frame []byte) (SelfInfo, error) {
 		}
 	}
 	return s, nil
+}
+
+// RadioParams are the LoRa radio settings written via CMD_SET_RADIO_PARAMS.
+// Units match the companion wire format: freq in kHz, bandwidth in Hz.
+type RadioParams struct {
+	FreqKHz     uint32 `json:"freqKHz"`     // e.g. 910525 for 910.525 MHz
+	BandwidthHz uint32 `json:"bandwidthHz"` // e.g. 62500 for 62.5 kHz
+	SF          uint8  `json:"sf"`          // spreading factor 5–12
+	CR          uint8  `json:"cr"`          // coding rate 5–8
+}
+
+// ValidateRadioParams enforces the same ranges the companion firmware checks in
+// CMD_SET_RADIO_PARAMS, so we reject bad values before touching the radio.
+func ValidateRadioParams(p RadioParams) error {
+	if p.FreqKHz < 150000 || p.FreqKHz > 2500000 {
+		return fmt.Errorf("%w: freq %d kHz out of range 150000–2500000", ErrBadRadioParams, p.FreqKHz)
+	}
+	if p.BandwidthHz < 7000 || p.BandwidthHz > 500000 {
+		return fmt.Errorf("%w: bandwidth %d Hz out of range 7000–500000", ErrBadRadioParams, p.BandwidthHz)
+	}
+	if p.SF < 5 || p.SF > 12 {
+		return fmt.Errorf("%w: sf %d out of range 5–12", ErrBadRadioParams, p.SF)
+	}
+	if p.CR < 5 || p.CR > 8 {
+		return fmt.Errorf("%w: cr %d out of range 5–8", ErrBadRadioParams, p.CR)
+	}
+	return nil
+}
+
+// BuildSetRadioParams builds CMD_SET_RADIO_PARAMS. Layout (companion firmware):
+//
+//	cmd + freq(4, kHz) + bw(4, Hz) + sf(1) + cr(1)
+//
+// The optional trailing client_repeat byte is omitted (defaults to 0/off).
+func BuildSetRadioParams(p RadioParams) ([]byte, error) {
+	if err := ValidateRadioParams(p); err != nil {
+		return nil, err
+	}
+	frame := make([]byte, 1+4+4+1+1)
+	frame[0] = CmdSetRadioParams
+	binary.LittleEndian.PutUint32(frame[1:5], p.FreqKHz)
+	binary.LittleEndian.PutUint32(frame[5:9], p.BandwidthHz)
+	frame[9] = p.SF
+	frame[10] = p.CR
+	return frame, nil
+}
+
+// BuildSetTxPower builds CMD_SET_RADIO_TX_POWER (signed dBm, -9..MAX).
+func BuildSetTxPower(dbm int8) ([]byte, error) {
+	if dbm < -9 || dbm > 30 {
+		return nil, fmt.Errorf("%w: tx power %d dBm out of range -9..30", ErrBadRadioParams, dbm)
+	}
+	return []byte{CmdSetRadioTxPower, byte(dbm)}, nil
 }
 
 // BattStorage is the parsed RESP_CODE_BATT_AND_STORAGE.

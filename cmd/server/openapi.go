@@ -55,6 +55,9 @@ func routeDescriptions() map[string]routeMeta {
 		"POST /api/companion/test": {Summary: "Enqueue USB companion self-test", Description: "Writes a marker request for companion-poller to run OpenSerial → APP_START → GET_CONTACTS (no RF login). Returns 202 with an id; poll GET /api/companion/test/status.", Tag: "admin", Auth: true},
 		"GET /api/companion/test/status": {Summary: "USB companion self-test status", Description: "Returns pending or done for a previously enqueued companion USB self-test (query id=).", Tag: "admin", Auth: true,
 			QueryParams: []paramMeta{{Name: "id", Description: "Self-test request id from POST /api/companion/test", Type: "string", Required: true}}},
+		"POST /api/companion/config": {Summary: "Configure companion radio", Description: "Writes a marker request for companion-poller to apply CMD_SET_RADIO_PARAMS (freq/bw/sf/cr) and/or CMD_SET_RADIO_TX_POWER, then re-read self-info to confirm. JSON body: {region?, radio?:{freqKHz,bandwidthHz,sf,cr}, txPowerDbm?}. Returns 202 with an id; poll GET /api/companion/config/status.", Tag: "admin", Auth: true},
+		"GET /api/companion/config/status": {Summary: "Companion radio-config status", Description: "Returns pending or done for a previously enqueued companion radio-config request (query id=).", Tag: "admin", Auth: true,
+			QueryParams: []paramMeta{{Name: "id", Description: "Config request id from POST /api/companion/config", Type: "string", Required: true}}},
 
 		// Packets
 		"GET /api/packets": {Summary: "List packets", Description: "Returns decoded packets with filtering, sorting, and pagination.", Tag: "packets",

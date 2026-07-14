@@ -81,14 +81,17 @@ func (r *TestResult) AddStep(name string, ok bool, detail string) {
 	r.Steps = append(r.Steps, DiagStep{Name: name, OK: ok, Detail: detail})
 }
 
-// NewTestID returns a 16-hex-char random id for marker filenames.
-func NewTestID() string {
+// randHexID returns a 16-hex-char random id for marker filenames.
+func randHexID() string {
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return fmt.Sprintf("%016x", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(b[:])
 }
+
+// NewTestID returns a random id for USB self-test marker filenames.
+func NewTestID() string { return randHexID() }
 
 // TestQueueDir returns data/companion-test-requests under configDir.
 func TestQueueDir(configDir string) string {
@@ -139,19 +142,7 @@ func WriteTestRequest(configDir string, req TestRequest) error {
 		return err
 	}
 	p, _ := TestRequestPath(configDir, req.ID)
-	b, err := json.MarshalIndent(req, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, p); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return nil
+	return writeJSONAtomic(p, req)
 }
 
 func WriteTestResult(configDir string, res TestResult) error {
@@ -162,16 +153,7 @@ func WriteTestResult(configDir string, res TestResult) error {
 		return err
 	}
 	p, _ := TestResultPath(configDir, res.ID)
-	b, err := json.MarshalIndent(res, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, p); err != nil {
-		_ = os.Remove(tmp)
+	if err := writeJSONAtomic(p, res); err != nil {
 		return err
 	}
 	reqPath, _ := TestRequestPath(configDir, res.ID)

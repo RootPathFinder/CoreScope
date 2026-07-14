@@ -7,6 +7,15 @@
   var _msgTimer = null;
   var _pollTimer = null;
   var _testingUSB = false;
+  var _configuring = false;
+
+  // Region presets sourced from MeshCore firmware docs (faq.md / cli_commands.md).
+  // freqMHz + bwKHz are the human units; converted to wire units (kHz / Hz) on send.
+  var REGION_PRESETS = {
+    us: { label: 'US/Canada (recommended)', freqMHz: 910.525, bwKHz: 62.5, sf: 7, cr: 5 },
+    us_legacy: { label: 'US/Canada (legacy 250k / SF11)', freqMHz: 910.525, bwKHz: 250, sf: 11, cr: 5 },
+    eu: { label: 'EU / UK', freqMHz: 869.525, bwKHz: 250, sf: 11, cr: 5 }
+  };
 
   function esc(s) {
     return (typeof escapeHtml === 'function') ? escapeHtml(String(s == null ? '' : s)) : String(s == null ? '' : s)
@@ -295,7 +304,10 @@
       if (r.self.nodeName) idBits.push('node ' + esc(r.self.nodeName));
       if (r.self.publicKey) idBits.push('pubkey ' + esc(shortKey(r.self.publicKey)));
       if (typeof r.self.txPower === 'number') idBits.push('TX ' + r.self.txPower + '/' + (r.self.maxTxPower || '?') + ' dBm');
-      if (r.self.freqHz) idBits.push((r.self.freqHz / 1000000).toFixed(3) + ' MHz');
+      if (r.self.freqKHz) idBits.push((r.self.freqKHz / 1000).toFixed(3) + ' MHz');
+      if (r.self.bandwidthHz) idBits.push('BW ' + (r.self.bandwidthHz / 1000).toFixed(1) + ' kHz');
+      if (r.self.sf) idBits.push('SF' + r.self.sf);
+      if (r.self.cr) idBits.push('CR' + r.self.cr);
     }
     if (r.device) {
       if (r.device.firmwareVersion) idBits.push('fw ' + esc(r.device.firmwareVersion));
@@ -396,6 +408,124 @@
     }
   }
 
+  function fillRadioFromPreset(region) {
+    var preset = REGION_PRESETS[region];
+    var custom = !preset;
+    var q = function (sel) { return _root && _root.querySelector(sel); };
+    var freq = q('#mr-freq'), bw = q('#mr-bw'), sf = q('#mr-sf'), cr = q('#mr-cr');
+    if (!freq || !bw || !sf || !cr) return;
+    if (preset) {
+      freq.value = preset.freqMHz;
+      bw.value = preset.bwKHz;
+      sf.value = preset.sf;
+      cr.value = preset.cr;
+    }
+    [freq, bw, sf, cr].forEach(function (el) { el.readOnly = !custom; });
+  }
+
+  function renderConfigResult(r) {
+    var el = _root && _root.querySelector('#mr-config-result');
+    if (!el) return;
+    if (!r) { el.hidden = true; el.innerHTML = ''; return; }
+    var rows = [];
+    rows.push('<div class="mr-companion-row">'
+      + '<span class="mr-pill ' + (r.ok ? 'mr-pill-ok' : 'mr-pill-bad') + '">'
+      + (r.ok ? 'Applied' : 'Failed') + (r.durationMs ? ' · ' + r.durationMs + 'ms' : '') + '</span>'
+      + '</div>');
+    var s = r.selfAfter;
+    if (s) {
+      var bits = [];
+      if (s.freqKHz) bits.push((s.freqKHz / 1000).toFixed(3) + ' MHz');
+      if (s.bandwidthHz) bits.push('BW ' + (s.bandwidthHz / 1000).toFixed(1) + ' kHz');
+      if (s.sf) bits.push('SF' + s.sf);
+      if (s.cr) bits.push('CR' + s.cr);
+      if (typeof s.txPower === 'number') bits.push('TX ' + s.txPower + ' dBm');
+      rows.push('<p class="text-muted mr-diag-id">Device now reports: ' + bits.map(esc).join(' · ') + '</p>');
+    }
+    if (r.steps && r.steps.length) {
+      var items = r.steps.map(function (st) {
+        var mark = st.ok ? '✓' : '✗';
+        var cls = st.ok ? 'mr-step-ok' : 'mr-step-bad';
+        return '<li class="' + cls + '"><code>' + esc(st.name) + '</code> ' + mark
+          + (st.detail ? ' <span class="text-muted">' + esc(st.detail) + '</span>' : '') + '</li>';
+      }).join('');
+      rows.push('<ul class="mr-diag-steps">' + items + '</ul>');
+    }
+    if (!r.ok && r.error) rows.push('<p class="mr-err mr-diag-err">' + esc(r.error) + '</p>');
+    el.innerHTML = rows.join('');
+    el.hidden = false;
+  }
+
+  async function onApplyRadio(ev) {
+    if (ev && ev.preventDefault) ev.preventDefault();
+    if (_configuring) return;
+    var keyInput = _root && _root.querySelector('#mr-apikey');
+    if (keyInput) setApiKey(keyInput.value.trim());
+    if (!apiKey()) { showMsg('apiKey required to configure the companion.', false); return; }
+
+    var q = function (sel) { return _root && _root.querySelector(sel); };
+    var freqMHz = parseFloat(q('#mr-freq').value);
+    var bwKHz = parseFloat(q('#mr-bw').value);
+    var sf = parseInt(q('#mr-sf').value, 10);
+    var cr = parseInt(q('#mr-cr').value, 10);
+    var txRaw = q('#mr-txpower').value.trim();
+    if (!isFinite(freqMHz) || !isFinite(bwKHz) || !(sf >= 5 && sf <= 12) || !(cr >= 5 && cr <= 8)) {
+      showMsg('Enter valid freq/BW/SF(5-12)/CR(5-8).', false);
+      return;
+    }
+    var body = {
+      region: (q('#mr-region') && q('#mr-region').options[q('#mr-region').selectedIndex].text) || '',
+      radio: {
+        freqKHz: Math.round(freqMHz * 1000),
+        bandwidthHz: Math.round(bwKHz * 1000),
+        sf: sf,
+        cr: cr
+      }
+    };
+    if (txRaw !== '') {
+      var tx = parseInt(txRaw, 10);
+      if (!(tx >= -9 && tx <= 30)) { showMsg('TX power must be between -9 and 30 dBm.', false); return; }
+      body.txPowerDbm = tx;
+    }
+    var confirmMsg = 'Apply ' + freqMHz + ' MHz / BW ' + bwKHz + ' kHz / SF' + sf + ' / CR' + cr
+      + (body.txPowerDbm != null ? (' / ' + body.txPowerDbm + ' dBm') : '')
+      + ' to the USB companion?\n\nWrong values can disconnect it from your mesh.';
+    if (typeof window !== 'undefined' && window.confirm && !window.confirm(confirmMsg)) return;
+
+    _configuring = true;
+    var applyBtn = q('#mr-apply-radio');
+    if (applyBtn) { applyBtn.disabled = true; applyBtn.textContent = 'Applying…'; }
+    showMsg('Radio config queued — poller will apply and verify…', true);
+    try {
+      var res = await fetch('/api/companion/config', { method: 'POST', headers: headers(true), body: JSON.stringify(body) });
+      var out = await res.json().catch(function () { return {}; });
+      if (!res.ok) { showMsg((out && out.error) || ('Config failed (' + res.status + ')'), false); return; }
+      var id = out && out.id;
+      if (!id) { showMsg('Config enqueue returned no id.', false); return; }
+      var deadline = Date.now() + 45000;
+      while (Date.now() < deadline) {
+        await new Promise(function (r) { setTimeout(r, 800); });
+        var stRes = await fetch('/api/companion/config/status?id=' + encodeURIComponent(id), { headers: headers(false) });
+        var last = await stRes.json().catch(function () { return {}; });
+        if (!stRes.ok) { showMsg((last && last.error) || ('Status failed (' + stRes.status + ')'), false); return; }
+        if (last.status === 'done' && last.result) {
+          renderConfigResult(last.result);
+          if (last.result.ok) showMsg('Radio config applied and verified on the companion.', true);
+          else showMsg('Radio config FAIL — ' + (last.result.error || 'unknown error'), false);
+          await refresh(true);
+          return;
+        }
+      }
+      showMsg('Config still pending — is companion-poller running?', false);
+    } catch (err) {
+      showMsg('Config failed: ' + (err && err.message || err), false);
+    } finally {
+      _configuring = false;
+      var b = _root && _root.querySelector('#mr-apply-radio');
+      if (b) { b.disabled = false; b.textContent = 'Apply to companion'; }
+    }
+  }
+
   function onClick(ev) {
     var testBtn = ev.target && ev.target.closest ? ev.target.closest('[data-action="test-companion"]') : null;
     if (testBtn) {
@@ -421,6 +551,28 @@
       +   '<label class="mr-label">API key <input type="password" id="mr-apikey" autocomplete="off" placeholder="apiKey from config.json"></label>'
       +   '<p class="text-muted mr-hint">Stored only in this browser (localStorage). Required for vault operations.</p>'
       + '</div>'
+      + '<form id="mr-radio-form" class="mr-card">'
+      +   '<h3>Configure companion radio</h3>'
+      +   '<p class="text-muted mr-hint">Applies LoRa settings to the USB companion over serial (no reboot). '
+      +     'Wrong values can cut the companion off from your mesh and managed repeaters — pick your region preset.</p>'
+      +   '<label class="mr-label">Region preset'
+      +     '<select id="mr-region">'
+      +       '<option value="us">US/Canada (recommended) — 910.525 MHz, BW 62.5, SF7, CR5</option>'
+      +       '<option value="us_legacy">US/Canada (legacy) — 910.525 MHz, BW 250, SF11, CR5</option>'
+      +       '<option value="eu">EU / UK — 869.525 MHz, BW 250, SF11, CR5</option>'
+      +       '<option value="custom">Custom…</option>'
+      +     '</select>'
+      +   '</label>'
+      +   '<div class="mr-radio-grid">'
+      +     '<label>Freq (MHz)<input id="mr-freq" type="number" step="0.001" min="0.3" max="2500"></label>'
+      +     '<label>Bandwidth (kHz)<input id="mr-bw" type="number" step="0.1" min="7" max="500"></label>'
+      +     '<label>SF<input id="mr-sf" type="number" min="5" max="12"></label>'
+      +     '<label>CR<input id="mr-cr" type="number" min="5" max="8"></label>'
+      +     '<label>TX power (dBm)<input id="mr-txpower" type="number" min="-9" max="30" placeholder="optional"></label>'
+      +   '</div>'
+      +   '<button type="submit" class="btn" id="mr-apply-radio">Apply to companion</button>'
+      +   '<div class="mr-card mr-config-result" id="mr-config-result" hidden></div>'
+      + '</form>'
       + '<form id="mr-add-form" class="mr-card">'
       +   '<h3>Add repeater</h3>'
       +   '<label class="mr-label">Public key <input id="mr-pubkey" required spellcheck="false" placeholder="64-char hex pubkey"></label>'
@@ -448,6 +600,13 @@
       if (keyInput) setApiKey(keyInput.value.trim());
       refresh(false);
     });
+    var regionSel = container.querySelector('#mr-region');
+    if (regionSel) {
+      regionSel.addEventListener('change', function () { fillRadioFromPreset(regionSel.value); });
+      fillRadioFromPreset(regionSel.value);
+    }
+    var radioForm = container.querySelector('#mr-radio-form');
+    if (radioForm) radioForm.addEventListener('submit', onApplyRadio);
     container.addEventListener('click', onClick);
     refresh(false);
     _pollTimer = setInterval(function () { refresh(true); }, 30000);
