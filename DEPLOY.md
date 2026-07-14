@@ -18,8 +18,10 @@ If the package is private, configure Portainer to use a GitHub Container Registr
 
 ### CI notes for forks
 
-- `:edge` is published after the **Go Build & Test** job (not after Playwright). Playwright still runs in parallel.
+- `:edge` is published after the **Go Build & Test** job (not after Playwright). Playwright still runs in parallel on PRs.
+- **Merge commits** on `master` skip go-test + Playwright (PR already validated) and publish `:edge` only (~5 min vs ~25 min).
 - **Deploy Staging** only runs when the repository variable `STAGING_ENABLED` is set to `true` *and* a self-hosted runner labeled `meshcore-runner-2` is available. Leave it unset for Portainer-only forks so CI is not blocked waiting for a runner that does not exist.
+- **Squad Heartbeat** runs every 4 hours (not every 30 min) to reduce Actions noise when Ralph triage is idle.
 
 ## Managed repeaters (admin password vault + companion poller)
 
