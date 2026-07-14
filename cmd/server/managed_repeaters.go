@@ -15,31 +15,35 @@ import (
 
 // ManagedRepeaterView is the API projection for one vault entry + optional poll.
 type ManagedRepeaterView struct {
-	ID               string                  `json:"id"`
-	PublicKey        string                  `json:"publicKey"`
-	Name             string                  `json:"name,omitempty"`
-	HasAdminPassword bool                    `json:"hasAdminPassword"`
-	CreatedAt        string                  `json:"createdAt"`
-	UpdatedAt        string                  `json:"updatedAt"`
+	ID               string                   `json:"id"`
+	PublicKey        string                   `json:"publicKey"`
+	Name             string                   `json:"name,omitempty"`
+	HasAdminPassword bool                     `json:"hasAdminPassword"`
+	CreatedAt        string                   `json:"createdAt"`
+	UpdatedAt        string                   `json:"updatedAt"`
+	CompanionKnown   bool                     `json:"companionKnown"`
 	Poll             *ManagedRepeaterPollView `json:"poll,omitempty"`
 }
 
 // ManagedRepeaterPollView is the latest companion-poller snapshot (no secrets).
 type ManagedRepeaterPollView struct {
-	PolledAt   string                  `json:"polledAt,omitempty"`
-	OK         bool                    `json:"ok"`
-	Error      string                  `json:"error,omitempty"`
-	IsAdmin    bool                    `json:"isAdmin,omitempty"`
-	DurationMs int64                   `json:"durationMs,omitempty"`
+	PolledAt   string                   `json:"polledAt,omitempty"`
+	OK         bool                     `json:"ok"`
+	Error      string                   `json:"error,omitempty"`
+	IsAdmin    bool                     `json:"isAdmin,omitempty"`
+	DurationMs int64                    `json:"durationMs,omitempty"`
 	Stats      *companion.RepeaterStats `json:"stats,omitempty"`
 }
 
 // ManagedRepeatersListResponse is the GET /api/managed-repeaters payload.
 type ManagedRepeatersListResponse struct {
-	Repeaters []ManagedRepeaterView      `json:"repeaters"`
-	VaultPath string                     `json:"vaultPath,omitempty"`
-	Companion *companion.CompanionInfo   `json:"companion,omitempty"`
-	StatusAt  string                     `json:"statusUpdatedAt,omitempty"`
+	Repeaters    []ManagedRepeaterView    `json:"repeaters"`
+	VaultPath    string                   `json:"vaultPath,omitempty"`
+	Companion    *companion.CompanionInfo `json:"companion,omitempty"`
+	StatusAt     string                   `json:"statusUpdatedAt,omitempty"`
+	Contacts     []companion.Contact      `json:"contacts,omitempty"`
+	ContactsAt   string                   `json:"contactsAt,omitempty"`
+	ContactCount int                      `json:"contactCount,omitempty"`
 }
 
 // ManagedRepeaterWriteRequest is the POST/PUT body.
@@ -77,6 +81,10 @@ func (s *Server) handleListManagedRepeaters(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	statusDoc, _ := companion.OpenStatusStore(s.configDir).Load()
+	known := make(map[string]struct{}, len(statusDoc.Contacts))
+	for _, c := range statusDoc.Contacts {
+		known[strings.ToLower(c.PublicKey)] = struct{}{}
+	}
 	out := make([]ManagedRepeaterView, 0, len(list))
 	for _, v := range list {
 		row := ManagedRepeaterView{
@@ -87,14 +95,23 @@ func (s *Server) handleListManagedRepeaters(w http.ResponseWriter, r *http.Reque
 			CreatedAt:        v.CreatedAt,
 			UpdatedAt:        v.UpdatedAt,
 		}
+		_, row.CompanionKnown = known[strings.ToLower(v.PublicKey)]
 		if snap, ok := statusDoc.Repeaters[v.PublicKey]; ok {
 			row.Poll = pollViewFromSnapshot(snap)
 		}
 		out = append(out, row)
 	}
 	resp := ManagedRepeatersListResponse{
-		Repeaters: out,
-		VaultPath: s.repeaterVault.Path(),
+		Repeaters:    out,
+		VaultPath:    s.repeaterVault.Path(),
+		Contacts:     statusDoc.Contacts,
+		ContactCount: statusDoc.ContactCount,
+	}
+	if resp.ContactCount == 0 && len(statusDoc.Contacts) > 0 {
+		resp.ContactCount = len(statusDoc.Contacts)
+	}
+	if !statusDoc.ContactsAt.IsZero() {
+		resp.ContactsAt = statusDoc.ContactsAt.UTC().Format(timeRFC3339)
 	}
 	if !statusDoc.UpdatedAt.IsZero() {
 		resp.StatusAt = statusDoc.UpdatedAt.UTC().Format(timeRFC3339)

@@ -109,6 +109,72 @@ func (c *Client) LoginAndStatus(pubKeyHex, password string, timeout time.Duratio
 	return login, status, err
 }
 
+// GetContacts sends CMD_GET_CONTACTS and drains START → CONTACT* → END.
+// Contacts are streamed one-per-loop by companion firmware, so timeout should
+// be generous (tens of seconds) when the contact book is large.
+func (c *Client) GetContacts(timeout time.Duration) ([]Contact, uint32, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	if err := WriteFrame(c.port, BuildGetContacts()); err != nil {
+		return nil, 0, err
+	}
+
+	deadline := time.Now().Add(timeout)
+	var total uint32
+	var gotStart bool
+	out := make([]Contact, 0, 16)
+
+	for time.Now().Before(deadline) {
+		remain := time.Until(deadline)
+		if remain < 50*time.Millisecond {
+			break
+		}
+		frame, err := ReadFrameWithDeadline(c.port, c.fr, remain)
+		if err != nil {
+			if !gotStart {
+				return nil, 0, fmt.Errorf("get_contacts start: %w", err)
+			}
+			return out, total, fmt.Errorf("get_contacts drain: %w (got %d/%d)", err, len(out), total)
+		}
+		if len(frame) == 0 {
+			continue
+		}
+		switch frame[0] {
+		case RespContactsStart:
+			n, err := ParseContactsStart(frame)
+			if err != nil {
+				return nil, 0, err
+			}
+			total = n
+			gotStart = true
+			if cap(out) < int(n) && n < 512 {
+				out = make([]Contact, 0, int(n))
+			}
+		case RespContact:
+			ct, err := ParseContact(frame)
+			if err != nil {
+				continue // skip malformed; keep draining to END
+			}
+			out = append(out, ct)
+		case RespEndOfContacts:
+			return out, total, nil
+		case RespError:
+			return nil, 0, MapErrorCode(ParseErrorCode(frame))
+		default:
+			// Ignore unsolicited pushes while draining the contact list.
+			continue
+		}
+	}
+	if !gotStart {
+		return nil, 0, ErrTimeout
+	}
+	return out, total, fmt.Errorf("%w: contact list incomplete (%d of ~%d)", ErrTimeout, len(out), total)
+}
+
 func (c *Client) waitSentOrErr(timeout time.Duration) (SentAck, error) {
 	deadline := time.Now().Add(timeout)
 	if timeout <= 0 {

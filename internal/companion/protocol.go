@@ -11,18 +11,22 @@ import (
 
 // Companion protocol command / response codes (MeshCore companion radio).
 const (
-	CmdAppStart       byte = 0x01
-	CmdDeviceQuery    byte = 0x16
-	CmdSendLogin      byte = 0x1A
-	CmdSendStatusReq  byte = 0x1B
-	CmdLogout         byte = 0x1D
-	CmdSendTelemetry  byte = 0x27
+	CmdAppStart      byte = 0x01
+	CmdGetContacts   byte = 0x04
+	CmdDeviceQuery   byte = 0x16
+	CmdSendLogin     byte = 0x1A
+	CmdSendStatusReq byte = 0x1B
+	CmdLogout        byte = 0x1D
+	CmdSendTelemetry byte = 0x27
 
-	RespOK         byte = 0x00
-	RespError      byte = 0x01
-	RespSelfInfo   byte = 0x05
-	RespMsgSent    byte = 0x06
-	RespDeviceInfo byte = 0x0D
+	RespOK            byte = 0x00
+	RespError         byte = 0x01
+	RespContactsStart byte = 0x02
+	RespContact       byte = 0x03
+	RespEndOfContacts byte = 0x04
+	RespSelfInfo      byte = 0x05
+	RespMsgSent       byte = 0x06
+	RespDeviceInfo    byte = 0x0D
 
 	PushLoginSuccess   byte = 0x85
 	PushLoginFail      byte = 0x86
@@ -30,7 +34,17 @@ const (
 	PushTelemetryResp  byte = 0x8B
 
 	PubKeySize     = 32
+	MaxPathSize    = 64
 	MaxPasswordLen = 15
+	// ContactFrameMin is the on-wire size of RESP_CODE_CONTACT (excl. framing).
+	// code(1)+pubkey(32)+type+flags+pathLen(3)+path(64)+name(32)+timestamps/latlon(16)=148
+	ContactFrameMin = 148
+
+	AdvTypeNone     = 0
+	AdvTypeChat     = 1
+	AdvTypeRepeater = 2
+	AdvTypeRoom     = 3
+	AdvTypeSensor   = 4
 )
 
 var (
@@ -67,6 +81,116 @@ func BuildAppStart(appName string) []byte {
 // BuildDeviceQuery builds CMD_DEVICE_QUERY.
 func BuildDeviceQuery() []byte {
 	return []byte{CmdDeviceQuery, 0x03}
+}
+
+// BuildGetContacts builds CMD_GET_CONTACTS (optional since filter omitted = full list).
+func BuildGetContacts() []byte {
+	return []byte{CmdGetContacts}
+}
+
+// Contact is one companion contact from RESP_CODE_CONTACT.
+type Contact struct {
+	PublicKey  string `json:"publicKey"`
+	Name       string `json:"name,omitempty"`
+	Type       uint8  `json:"type"`
+	TypeLabel  string `json:"typeLabel,omitempty"`
+	Flags      uint8  `json:"flags,omitempty"`
+	OutPathLen int    `json:"outPathLen"` // 0–64, or 255 = unknown path
+	LastAdvert uint32 `json:"lastAdvert,omitempty"`
+	LastMod    uint32 `json:"lastMod,omitempty"`
+	LatE6      int32  `json:"latE6,omitempty"`
+	LonE6      int32  `json:"lonE6,omitempty"`
+}
+
+// AdvTypeLabel maps ADV_TYPE_* to a short UI label.
+func AdvTypeLabel(t uint8) string {
+	switch t {
+	case AdvTypeChat:
+		return "chat"
+	case AdvTypeRepeater:
+		return "repeater"
+	case AdvTypeRoom:
+		return "room"
+	case AdvTypeSensor:
+		return "sensor"
+	case AdvTypeNone:
+		return "none"
+	default:
+		return fmt.Sprintf("type%d", t)
+	}
+}
+
+// ParseContactsStart returns the total contact count from RESP_CODE_CONTACTS_START.
+func ParseContactsStart(frame []byte) (uint32, error) {
+	if len(frame) < 5 || frame[0] != RespContactsStart {
+		return 0, ErrProtocol
+	}
+	return binary.LittleEndian.Uint32(frame[1:5]), nil
+}
+
+// ParseContact parses RESP_CODE_CONTACT into a Contact summary.
+func ParseContact(frame []byte) (Contact, error) {
+	var c Contact
+	if len(frame) < ContactFrameMin || frame[0] != RespContact {
+		return c, ErrProtocol
+	}
+	c.PublicKey = hex.EncodeToString(frame[1 : 1+PubKeySize])
+	c.Type = frame[1+PubKeySize]
+	c.Flags = frame[1+PubKeySize+1]
+	c.OutPathLen = int(frame[1+PubKeySize+2])
+	c.TypeLabel = AdvTypeLabel(c.Type)
+	nameOff := 1 + PubKeySize + 3 + MaxPathSize
+	nameBytes := frame[nameOff : nameOff+32]
+	c.Name = strings.TrimRight(string(nameBytes), "\x00")
+	tsOff := nameOff + 32
+	c.LastAdvert = binary.LittleEndian.Uint32(frame[tsOff : tsOff+4])
+	c.LatE6 = int32(binary.LittleEndian.Uint32(frame[tsOff+4 : tsOff+8]))
+	c.LonE6 = int32(binary.LittleEndian.Uint32(frame[tsOff+8 : tsOff+12]))
+	c.LastMod = binary.LittleEndian.Uint32(frame[tsOff+12 : tsOff+16])
+	return c, nil
+}
+
+// NotFoundHint builds a verbose explanation when ERR_CODE_NOT_FOUND fires.
+func NotFoundHint(pubKeyHex string, contacts []Contact) string {
+	pk := strings.ToLower(strings.TrimSpace(pubKeyHex))
+	shortPK := pk
+	if len(shortPK) > 8 {
+		shortPK = shortPK[:8]
+	}
+	for _, c := range contacts {
+		if strings.EqualFold(c.PublicKey, pk) {
+			path := "unknown path"
+			if c.OutPathLen != 0xFF {
+				path = fmt.Sprintf("out_path_len=%d", c.OutPathLen)
+			}
+			return fmt.Sprintf(
+				"contact not found on companion for %s — unexpected: pubkey IS in companion contacts (%s, %s, %s). Retry or re-add contact.",
+				shortPK, c.Name, c.TypeLabel, path)
+		}
+	}
+	names := make([]string, 0, len(contacts))
+	for _, c := range contacts {
+		label := c.Name
+		if label == "" {
+			if len(c.PublicKey) >= 8 {
+				label = c.PublicKey[:8]
+			} else {
+				label = c.PublicKey
+			}
+		}
+		names = append(names, fmt.Sprintf("%s(%s)", label, c.TypeLabel))
+	}
+	list := "(none)"
+	if len(names) > 0 {
+		if len(names) > 12 {
+			list = strings.Join(names[:12], ", ") + fmt.Sprintf(", … +%d more", len(names)-12)
+		} else {
+			list = strings.Join(names, ", ")
+		}
+	}
+	return fmt.Sprintf(
+		"contact not found on companion for %s — companion has %d contact(s) [%s]; pubkey not among them. MQTT/DB knowing the node is not enough: flood an advert toward the USB companion or add the contact in the MeshCore app.",
+		shortPK, len(contacts), list)
 }
 
 // BuildLogin builds CMD_SEND_LOGIN.

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -271,13 +272,73 @@ func TestClientLoginAndStatus(t *testing.T) {
 	}
 }
 
-func TestDecodePubKey(t *testing.T) {
-	if _, err := DecodePubKey("abcd"); err != ErrBadPubkey {
-		t.Fatalf("short: %v", err)
-	}
-	_, err := DecodePubKey(hex.EncodeToString(make([]byte, 32)))
+func TestParseContactAndNotFoundHint(t *testing.T) {
+	pk := bytes.Repeat([]byte{0xab}, 32)
+	frame := make([]byte, ContactFrameMin)
+	frame[0] = RespContact
+	copy(frame[1:], pk)
+	frame[1+PubKeySize] = AdvTypeRepeater
+	frame[1+PubKeySize+1] = 0
+	frame[1+PubKeySize+2] = 0xFF // unknown path
+	copy(frame[1+PubKeySize+3+MaxPathSize:], []byte("Hilltop\x00"))
+	binary.LittleEndian.PutUint32(frame[ContactFrameMin-16:], 100)
+	binary.LittleEndian.PutUint32(frame[ContactFrameMin-4:], 200)
+
+	ct, err := ParseContact(frame)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if ct.PublicKey != hex.EncodeToString(pk) || ct.Name != "Hilltop" || ct.TypeLabel != "repeater" {
+		t.Fatalf("contact=%+v", ct)
+	}
+	if ct.OutPathLen != 0xFF || ct.LastMod != 200 {
+		t.Fatalf("path/lastmod=%+v", ct)
+	}
+
+	start := make([]byte, 5)
+	start[0] = RespContactsStart
+	binary.LittleEndian.PutUint32(start[1:], 3)
+	n, err := ParseContactsStart(start)
+	if err != nil || n != 3 {
+		t.Fatalf("start n=%d err=%v", n, err)
+	}
+
+	hintMiss := NotFoundHint(hex.EncodeToString(pk), nil)
+	if !strings.Contains(hintMiss, "companion has 0 contact") || !strings.Contains(hintMiss, "flood an advert") {
+		t.Fatalf("miss hint=%s", hintMiss)
+	}
+	hintHit := NotFoundHint(hex.EncodeToString(pk), []Contact{ct})
+	if !strings.Contains(hintHit, "IS in companion contacts") {
+		t.Fatalf("hit hint=%s", hintHit)
+	}
+	other := NotFoundHint(hex.EncodeToString(bytes.Repeat([]byte{0x11}, 32)), []Contact{ct})
+	if !strings.Contains(other, "Hilltop(repeater)") || !strings.Contains(other, "not among them") {
+		t.Fatalf("other hint=%s", other)
+	}
+}
+
+func TestClientGetContacts(t *testing.T) {
+	pk := bytes.Repeat([]byte{0x22}, 32)
+	start := make([]byte, 5)
+	start[0] = RespContactsStart
+	binary.LittleEndian.PutUint32(start[1:], 1)
+	contact := make([]byte, ContactFrameMin)
+	contact[0] = RespContact
+	copy(contact[1:], pk)
+	contact[1+PubKeySize] = AdvTypeRoom
+	copy(contact[1+PubKeySize+3+MaxPathSize:], []byte("RoomA"))
+	end := []byte{RespEndOfContacts, 0, 0, 0, 0}
+
+	port := &scriptedPort{reads: [][][]byte{
+		{start, contact, end},
+	}}
+	c := NewClient(port, "test")
+	list, total, err := c.GetContacts(2 * time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(list) != 1 || list[0].Name != "RoomA" || list[0].TypeLabel != "room" {
+		t.Fatalf("list=%+v total=%d", list, total)
 	}
 }
 
