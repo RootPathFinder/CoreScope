@@ -1,10 +1,11 @@
-/* === CoreScope — managed-repeaters.js (M1 active telemetry) === */
+/* === CoreScope — managed-repeaters.js (M1 vault + M2 poll status) === */
 'use strict';
 
 (function () {
   var LS_API_KEY = 'meshcore-api-key';
   var _root = null;
   var _msgTimer = null;
+  var _pollTimer = null;
 
   function esc(s) {
     return (typeof escapeHtml === 'function') ? escapeHtml(String(s == null ? '' : s)) : String(s == null ? '' : s)
@@ -44,6 +45,75 @@
     return pk.slice(0, 8) + '…' + pk.slice(-4);
   }
 
+  function fmtUptime(secs) {
+    secs = Number(secs) || 0;
+    if (secs < 60) return secs + 's';
+    if (secs < 3600) return Math.floor(secs / 60) + 'm';
+    if (secs < 86400) return (secs / 3600).toFixed(1) + 'h';
+    return (secs / 86400).toFixed(1) + 'd';
+  }
+
+  function renderCompanion(companion, statusAt) {
+    var el = _root.querySelector('#mr-companion');
+    if (!el) return;
+    if (!companion) {
+      el.innerHTML = '<p class="text-muted">No companion-poller status yet. Deploy the poller service with <code>COMPANION_SERIAL=/dev/ttyACM1</code>.</p>';
+      return;
+    }
+    var ok = !!companion.ok;
+    el.innerHTML =
+      '<div class="mr-companion-row">'
+      + '<span class="mr-pill ' + (ok ? 'mr-pill-ok' : 'mr-pill-bad') + '">' + (ok ? 'Companion up' : 'Companion down') + '</span>'
+      + '<span class="text-muted">' + esc(companion.port || '') + (companion.baud ? (' @ ' + companion.baud) : '') + '</span>'
+      + (statusAt ? '<span class="text-muted">status ' + esc(statusAt) + '</span>' : '')
+      + (companion.lastError ? '<span class="mr-err">' + esc(companion.lastError) + '</span>' : '')
+      + '</div>';
+  }
+
+  function renderCards(repeaters) {
+    var host = _root.querySelector('#mr-cards');
+    if (!host) return;
+    if (!repeaters || !repeaters.length) {
+      host.innerHTML = '<p class="text-muted">No managed repeaters yet.</p>';
+      return;
+    }
+    host.innerHTML = repeaters.map(function (r) {
+      var poll = r.poll || null;
+      var stats = poll && poll.stats ? poll.stats : null;
+      var statusClass = !poll ? 'mr-pill-muted' : (poll.ok ? 'mr-pill-ok' : 'mr-pill-bad');
+      var statusLabel = !poll ? 'Never polled' : (poll.ok ? 'Online' : 'Poll failed');
+      var body = '';
+      if (stats) {
+        body =
+          '<div class="mr-stat-grid">'
+          + '<div><span class="mr-stat-label">Battery</span><span class="mr-stat-val">' + esc(String(stats.batteryMv)) + ' mV</span></div>'
+          + '<div><span class="mr-stat-label">Uptime</span><span class="mr-stat-val">' + esc(fmtUptime(stats.uptimeSecs)) + '</span></div>'
+          + '<div><span class="mr-stat-label">Noise</span><span class="mr-stat-val">' + esc(String(stats.noiseFloor)) + ' dBm</span></div>'
+          + '<div><span class="mr-stat-label">Last SNR</span><span class="mr-stat-val">' + esc(Number(stats.lastSnr).toFixed(1)) + ' dB</span></div>'
+          + '<div><span class="mr-stat-label">RX / TX</span><span class="mr-stat-val">' + esc(String(stats.packetsRecv)) + ' / ' + esc(String(stats.packetsSent)) + '</span></div>'
+          + '<div><span class="mr-stat-label">Queue</span><span class="mr-stat-val">' + esc(String(stats.txQueueLen)) + '</span></div>'
+          + '</div>';
+      } else if (poll && poll.error) {
+        body = '<p class="mr-err">' + esc(poll.error) + '</p>';
+      } else {
+        body = '<p class="text-muted">Waiting for companion-poller…</p>';
+      }
+      return '<article class="mr-monitor-card" data-id="' + esc(r.id) + '">'
+        + '<header class="mr-monitor-head">'
+        +   '<div><strong>' + esc(r.name || shortKey(r.publicKey)) + '</strong>'
+        +   '<div class="text-muted"><code title="' + esc(r.publicKey) + '">' + esc(shortKey(r.publicKey)) + '</code></div></div>'
+        +   '<span class="mr-pill ' + statusClass + '">' + statusLabel + '</span>'
+        + '</header>'
+        + body
+        + '<footer class="mr-monitor-foot text-muted">'
+        +   (poll && poll.polledAt ? ('Last poll ' + esc(poll.polledAt)) : 'Not polled yet')
+        +   (poll && poll.isAdmin ? ' · admin' : '')
+        +   ' · <button type="button" class="btn btn-sm" data-action="delete" data-id="' + esc(r.id) + '">Remove</button>'
+        + '</footer>'
+        + '</article>';
+    }).join('');
+  }
+
   function renderList(repeaters) {
     var tbody = _root.querySelector('#mr-tbody');
     if (!tbody) return;
@@ -52,33 +122,42 @@
       return;
     }
     tbody.innerHTML = repeaters.map(function (r) {
+      var poll = r.poll;
+      var pollCell = '—';
+      if (poll && poll.ok && poll.stats) pollCell = poll.stats.batteryMv + ' mV';
+      else if (poll && poll.error) pollCell = 'err';
+      else if (poll) pollCell = 'fail';
       return '<tr data-id="' + esc(r.id) + '">'
         + '<td><code title="' + esc(r.publicKey) + '">' + esc(shortKey(r.publicKey)) + '</code></td>'
         + '<td>' + esc(r.name || '—') + '</td>'
         + '<td>' + (r.hasAdminPassword ? 'saved' : 'missing') + '</td>'
-        + '<td class="text-muted">' + esc(r.updatedAt || '') + '</td>'
+        + '<td>' + esc(pollCell) + '</td>'
         + '<td><button type="button" class="btn btn-sm" data-action="delete" data-id="' + esc(r.id) + '">Remove</button></td>'
         + '</tr>';
     }).join('');
   }
 
-  async function refresh() {
+  async function refresh(silent) {
     if (!apiKey()) {
-      showMsg('Enter your apiKey (from config.json) to manage repeaters.', false);
+      if (!silent) showMsg('Enter your apiKey (from config.json) to manage repeaters.', false);
       renderList([]);
+      renderCards([]);
       return;
     }
     try {
       var res = await fetch('/api/managed-repeaters', { headers: headers(false) });
       var body = await res.json().catch(function () { return {}; });
       if (!res.ok) {
-        showMsg((body && body.error) || ('List failed (' + res.status + ')'), false);
+        if (!silent) showMsg((body && body.error) || ('List failed (' + res.status + ')'), false);
         return;
       }
-      renderList(body.repeaters || []);
-      showMsg('Loaded ' + ((body.repeaters && body.repeaters.length) || 0) + ' repeater(s).', true);
+      var list = body.repeaters || [];
+      renderList(list);
+      renderCards(list);
+      renderCompanion(body.companion, body.statusUpdatedAt);
+      if (!silent) showMsg('Loaded ' + list.length + ' repeater(s).', true);
     } catch (err) {
-      showMsg('List failed: ' + (err && err.message || err), false);
+      if (!silent) showMsg('List failed: ' + (err && err.message || err), false);
     }
   }
 
@@ -107,8 +186,8 @@
       (_root.querySelector('#mr-pubkey') || {}).value = '';
       (_root.querySelector('#mr-name') || {}).value = '';
       (_root.querySelector('#mr-password') || {}).value = '';
-      showMsg('Added ' + shortKey(body.publicKey) + '.', true);
-      await refresh();
+      showMsg('Added ' + shortKey(body.publicKey) + '. Poller will pick it up on the next cycle.', true);
+      await refresh(true);
     } catch (err) {
       showMsg('Add failed: ' + (err && err.message || err), false);
     }
@@ -128,7 +207,7 @@
         return;
       }
       showMsg('Removed.', true);
-      await refresh();
+      await refresh(true);
     } catch (err) {
       showMsg('Delete failed: ' + (err && err.message || err), false);
     }
@@ -145,24 +224,28 @@
     container.innerHTML =
       '<div class="managed-repeaters-page page-pad">'
       + '<h2>Managed Repeaters</h2>'
-      + '<p class="text-muted">Register remote MeshCore repeaters and store their <strong>admin passwords</strong> encrypted on this server. '
-      + 'Outbound polling (login / stats / telemetry) arrives in a later milestone once a local USB companion is wired.</p>'
+      + '<p class="text-muted">Encrypted admin passwords + live status from the local USB companion poller '
+      + '(login → status). Companion must already know each repeater as a contact (heard advert).</p>'
+      + '<div class="mr-card" id="mr-companion"><p class="text-muted">Checking companion…</p></div>'
       + '<div class="mr-card">'
       +   '<label class="mr-label">API key <input type="password" id="mr-apikey" autocomplete="off" placeholder="apiKey from config.json"></label>'
-      +   '<p class="text-muted mr-hint">Stored only in this browser (localStorage). Required for all vault operations.</p>'
+      +   '<p class="text-muted mr-hint">Stored only in this browser (localStorage). Required for vault operations.</p>'
       + '</div>'
       + '<form id="mr-add-form" class="mr-card">'
       +   '<h3>Add repeater</h3>'
       +   '<label class="mr-label">Public key <input id="mr-pubkey" required spellcheck="false" placeholder="64-char hex pubkey"></label>'
       +   '<label class="mr-label">Display name <input id="mr-name" maxlength="128" placeholder="optional"></label>'
-      +   '<label class="mr-label">Admin password <input id="mr-password" type="password" required autocomplete="new-password"></label>'
+      +   '<label class="mr-label">Admin password <input id="mr-password" type="password" required autocomplete="new-password" maxlength="15"></label>'
+      +   '<p class="text-muted mr-hint">MeshCore companion login passwords are max 15 characters.</p>'
       +   '<button type="submit" class="btn">Save encrypted</button>'
       + '</form>'
       + '<p id="mr-msg" class="mr-msg" role="status" aria-live="polite"></p>'
+      + '<div class="mr-toolbar"><h3>Monitoring</h3><button type="button" class="btn btn-sm" id="mr-refresh">Refresh</button></div>'
+      + '<div id="mr-cards" class="mr-cards"></div>'
       + '<div class="mr-card">'
-      +   '<div class="mr-toolbar"><h3>Registered</h3><button type="button" class="btn btn-sm" id="mr-refresh">Refresh</button></div>'
+      +   '<h3>Registry</h3>'
       +   '<table class="analytics-table" id="mr-table">'
-      +     '<thead><tr><th>Pubkey</th><th>Name</th><th>Password</th><th>Updated</th><th></th></tr></thead>'
+      +     '<thead><tr><th>Pubkey</th><th>Name</th><th>Password</th><th>Battery</th><th></th></tr></thead>'
       +     '<tbody id="mr-tbody"><tr><td colspan="5" class="text-muted">Loading…</td></tr></tbody>'
       +   '</table>'
       + '</div>'
@@ -173,21 +256,24 @@
     container.querySelector('#mr-add-form').addEventListener('submit', onAdd);
     container.querySelector('#mr-refresh').addEventListener('click', function () {
       if (keyInput) setApiKey(keyInput.value.trim());
-      refresh();
+      refresh(false);
     });
     container.addEventListener('click', onClick);
-    refresh();
+    refresh(false);
+    _pollTimer = setInterval(function () { refresh(true); }, 30000);
   }
 
   function destroy() {
     if (_msgTimer) clearTimeout(_msgTimer);
+    if (_pollTimer) clearInterval(_pollTimer);
     _msgTimer = null;
+    _pollTimer = null;
     _root = null;
   }
 
-  // Exposed for unit tests.
   window.ManagedRepeatersPage = {
     shortKey: shortKey,
+    fmtUptime: fmtUptime,
     normalizeApiKeyStorageKey: function () { return LS_API_KEY; }
   };
 

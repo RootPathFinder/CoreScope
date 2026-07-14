@@ -30,6 +30,10 @@ vm.runInContext(src, ctx);
 assert.ok(ctx.window.ManagedRepeatersPage, 'ManagedRepeatersPage global exported');
 assert.strictEqual(ctx.window.ManagedRepeatersPage.shortKey('aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899'), 'aabbccdd…8899');
 assert.strictEqual(ctx.window.ManagedRepeatersPage.normalizeApiKeyStorageKey(), 'meshcore-api-key');
+assert.strictEqual(ctx.window.ManagedRepeatersPage.fmtUptime(90), '1m');
+assert.ok(src.includes('mr-cards'), 'UI renders monitoring cards');
+assert.ok(src.includes('CMD_SEND_LOGIN') === false, 'no protocol constants leaked into UI');
+assert.ok(src.includes('companion-poller'), 'UI mentions companion poller');
 
 const bottomNav = fs.readFileSync(path.join(__dirname, 'public/bottom-nav.js'), 'utf8');
 assert.ok(bottomNav.includes("route: 'repeaters'"), 'bottom-nav includes repeaters route');

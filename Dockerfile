@@ -25,6 +25,7 @@ COPY internal/perfio/ ../../internal/perfio/
 COPY internal/mbcapqueue/ ../../internal/mbcapqueue/
 COPY internal/lora/ ../../internal/lora/
 COPY internal/repeatervault/ ../../internal/repeatervault/
+COPY internal/companion/ ../../internal/companion/
 RUN go mod download
 COPY cmd/server/ ./
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
@@ -55,6 +56,16 @@ COPY cmd/decrypt/ ./
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -ldflags="-s -w" -o /corescope-decrypt .
 
+# Build companion poller (USB serial → RF admin status for managed repeaters)
+WORKDIR /build/companion-poller
+COPY cmd/companion-poller/go.mod cmd/companion-poller/go.sum ./
+COPY internal/companion/ ../../internal/companion/
+COPY internal/repeatervault/ ../../internal/repeatervault/
+RUN go mod download
+COPY cmd/companion-poller/ ./
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -ldflags="-s -w" -o /corescope-companion-poller .
+
 # Runtime image
 FROM alpine:3.20
 
@@ -63,7 +74,7 @@ RUN apk add --no-cache mosquitto mosquitto-clients supervisor caddy wget
 WORKDIR /app
 
 # Go binaries
-COPY --from=builder /corescope-server /corescope-ingestor /corescope-decrypt /app/
+COPY --from=builder /corescope-server /corescope-ingestor /corescope-decrypt /corescope-companion-poller /app/
 
 # Frontend assets + config
 COPY public/ ./public/

@@ -9,13 +9,37 @@ import (
 	"strings"
 
 	"github.com/gorilla/mux"
+	"github.com/meshcore-analyzer/companion"
 	"github.com/meshcore-analyzer/repeatervault"
 )
 
+// ManagedRepeaterView is the API projection for one vault entry + optional poll.
+type ManagedRepeaterView struct {
+	ID               string                  `json:"id"`
+	PublicKey        string                  `json:"publicKey"`
+	Name             string                  `json:"name,omitempty"`
+	HasAdminPassword bool                    `json:"hasAdminPassword"`
+	CreatedAt        string                  `json:"createdAt"`
+	UpdatedAt        string                  `json:"updatedAt"`
+	Poll             *ManagedRepeaterPollView `json:"poll,omitempty"`
+}
+
+// ManagedRepeaterPollView is the latest companion-poller snapshot (no secrets).
+type ManagedRepeaterPollView struct {
+	PolledAt   string                  `json:"polledAt,omitempty"`
+	OK         bool                    `json:"ok"`
+	Error      string                  `json:"error,omitempty"`
+	IsAdmin    bool                    `json:"isAdmin,omitempty"`
+	DurationMs int64                   `json:"durationMs,omitempty"`
+	Stats      *companion.RepeaterStats `json:"stats,omitempty"`
+}
+
 // ManagedRepeatersListResponse is the GET /api/managed-repeaters payload.
 type ManagedRepeatersListResponse struct {
-	Repeaters []repeatervault.PublicView `json:"repeaters"`
+	Repeaters []ManagedRepeaterView      `json:"repeaters"`
 	VaultPath string                     `json:"vaultPath,omitempty"`
+	Companion *companion.CompanionInfo   `json:"companion,omitempty"`
+	StatusAt  string                     `json:"statusUpdatedAt,omitempty"`
 }
 
 // ManagedRepeaterWriteRequest is the POST/PUT body.
@@ -52,10 +76,48 @@ func (s *Server) handleListManagedRepeaters(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, "failed to list managed repeaters")
 		return
 	}
-	writeJSON(w, ManagedRepeatersListResponse{
-		Repeaters: list,
+	statusDoc, _ := companion.OpenStatusStore(s.configDir).Load()
+	out := make([]ManagedRepeaterView, 0, len(list))
+	for _, v := range list {
+		row := ManagedRepeaterView{
+			ID:               v.ID,
+			PublicKey:        v.PublicKey,
+			Name:             v.Name,
+			HasAdminPassword: v.HasAdminPassword,
+			CreatedAt:        v.CreatedAt,
+			UpdatedAt:        v.UpdatedAt,
+		}
+		if snap, ok := statusDoc.Repeaters[v.PublicKey]; ok {
+			row.Poll = pollViewFromSnapshot(snap)
+		}
+		out = append(out, row)
+	}
+	resp := ManagedRepeatersListResponse{
+		Repeaters: out,
 		VaultPath: s.repeaterVault.Path(),
-	})
+	}
+	if !statusDoc.UpdatedAt.IsZero() {
+		resp.StatusAt = statusDoc.UpdatedAt.UTC().Format(timeRFC3339)
+		c := statusDoc.Companion
+		resp.Companion = &c
+	}
+	writeJSON(w, resp)
+}
+
+const timeRFC3339 = "2006-01-02T15:04:05Z07:00"
+
+func pollViewFromSnapshot(snap companion.PollSnapshot) *ManagedRepeaterPollView {
+	pv := &ManagedRepeaterPollView{
+		OK:         snap.OK,
+		Error:      snap.Error,
+		IsAdmin:    snap.IsAdmin,
+		DurationMs: snap.DurationMs,
+		Stats:      snap.Stats,
+	}
+	if !snap.PolledAt.IsZero() {
+		pv.PolledAt = snap.PolledAt.UTC().Format(timeRFC3339)
+	}
+	return pv
 }
 
 func (s *Server) handleCreateManagedRepeater(w http.ResponseWriter, r *http.Request) {
@@ -76,7 +138,7 @@ func (s *Server) handleCreateManagedRepeater(w http.ResponseWriter, r *http.Requ
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(view)
+	_ = json.NewEncoder(w).Encode(toManagedView(view, nil))
 }
 
 func (s *Server) handleUpdateManagedRepeater(w http.ResponseWriter, r *http.Request) {
@@ -97,7 +159,7 @@ func (s *Server) handleUpdateManagedRepeater(w http.ResponseWriter, r *http.Requ
 		writeManagedRepeaterErr(w, err)
 		return
 	}
-	writeJSON(w, view)
+	writeJSON(w, toManagedView(view, nil))
 }
 
 func (s *Server) handleDeleteManagedRepeater(w http.ResponseWriter, r *http.Request) {
@@ -111,6 +173,18 @@ func (s *Server) handleDeleteManagedRepeater(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func toManagedView(v repeatervault.PublicView, poll *ManagedRepeaterPollView) ManagedRepeaterView {
+	return ManagedRepeaterView{
+		ID:               v.ID,
+		PublicKey:        v.PublicKey,
+		Name:             v.Name,
+		HasAdminPassword: v.HasAdminPassword,
+		CreatedAt:        v.CreatedAt,
+		UpdatedAt:        v.UpdatedAt,
+		Poll:             poll,
+	}
 }
 
 func writeManagedRepeaterErr(w http.ResponseWriter, err error) {

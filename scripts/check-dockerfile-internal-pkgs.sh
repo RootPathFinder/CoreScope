@@ -18,7 +18,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DOCKERFILE="$ROOT/Dockerfile"
-MODS=("$ROOT/cmd/server/go.mod" "$ROOT/cmd/ingestor/go.mod")
+MODS=("$ROOT/cmd/server/go.mod" "$ROOT/cmd/ingestor/go.mod" "$ROOT/cmd/companion-poller/go.mod")
 ERRORS=0
 
 # PKG_COUNT[pkg] = number of go.mod files that reference internal/<pkg>.

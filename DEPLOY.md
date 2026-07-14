@@ -16,17 +16,58 @@ Examples:
 
 If the package is private, configure Portainer to use a GitHub Container Registry credential with `read:packages` scope.
 
-## Managed repeaters (admin password vault)
+## Managed repeaters (admin password vault + companion poller)
 
-CoreScope can store admin credentials for remote MeshCore repeaters (Milestone 1 of active telemetry). Passwords are encrypted at rest under `/app/data/managed-repeaters.json` and are never returned by the API.
+CoreScope can store admin credentials for remote MeshCore repeaters and poll them over RF via a local **USB Serial Companion**.
 
-Requirements:
+### Milestone 1 — vault
 
+- Passwords encrypted at rest under `/app/data/managed-repeaters.json` (never returned by the API)
 - Set a strong `apiKey` in `config.json` (required for vault API access)
-- Optional: set `CORESCOPE_VAULT_KEY` (preferred dedicated vault key). If unset, the vault key is derived from `apiKey`
-- UI: `#/repeaters` (also in nav More sheet)
+- Optional: `CORESCOPE_VAULT_KEY` (preferred). If unset, the vault key is derived from `apiKey`
+- UI: `#/repeaters`
 
-Outbound RF polling still needs a local USB companion (Milestone 2) — this milestone only stores credentials securely.
+### Milestone 2 — companion poller
+
+Binary: `/app/corescope-companion-poller` (same image).
+
+It opens the companion serial port, logs into each vaulted repeater (`CMD_SEND_LOGIN`), requests status (`CMD_SEND_STATUS_REQ`), and writes `/app/data/managed-repeater-status.json`. The CoreScope server merges that into `GET /api/managed-repeaters` (`poll.stats`: battery, uptime, noise, SNR, packet counters).
+
+**Requirements:**
+
+- Companion flashed as **Serial Companion** firmware (not repeater)
+- Device mounted into the poller container (e.g. `/dev/ttyACM1`)
+- Each managed repeater must already be a **contact** on that companion (it must have heard an advert / been added once via the MeshCore app)
+- Admin passwords ≤ **15 characters** (companion protocol limit)
+
+**Portainer sidecar example:**
+
+```yaml
+  companion-poller:
+    image: ghcr.io/<owner>/<repo>:edge
+    container_name: corescope-companion-poller
+    restart: unless-stopped
+    user: root
+    devices:
+      - "/dev/ttyACM1:/dev/ttyACM1"
+    environment:
+      CORESCOPE_VAULT_KEY: "${CORESCOPE_VAULT_KEY}"
+      COMPANION_SERIAL: "/dev/ttyACM1"
+      COMPANION_BAUD: "115200"
+      COMPANION_POLL_INTERVAL: "5m"
+    volumes:
+      - corescope_data:/app/data
+    entrypoint:
+      - /app/corescope-companion-poller
+    command:
+      - -config-dir=/app
+      - -serial=/dev/ttyACM1
+```
+
+Share the same `corescope_data` volume with the main `corescope` service so the poller can read the vault and the UI can read status.
+
+Do **not** point `meshcoretomqtt` at the companion port — keep observer ingest and admin polling on separate devices/roles.
+
 
 ## Quick Start
 
