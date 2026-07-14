@@ -197,7 +197,7 @@ async function main() {
         // EXACTLY the non-active non-high routes so the channels link (when
         // active) stays inline and is not orphaned in the dropdown.
         if (w <= 1100) {
-          const ALL_NON_HIGH = ['#/channels', '#/tools', '#/observers', '#/analytics', '#/perf', '#/audio-lab'];
+          const ALL_NON_HIGH = ['#/channels', '#/tools', '#/observers', '#/repeaters', '#/analytics', '#/perf', '#/audio-lab'];
           const expectedMore = ALL_NON_HIGH.filter(h => h !== expectedActive).sort();
           assert.deepStrictEqual(
             [...data.moreItems].sort(),
