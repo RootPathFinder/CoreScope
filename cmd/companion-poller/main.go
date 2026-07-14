@@ -186,59 +186,67 @@ func pollOnce(vault *repeatervault.Store, status *companion.StatusStore, serialP
 			PolledAt:  time.Now().UTC(),
 		}
 		pkLower := strings.ToLower(r.PublicKey)
+		seedName := strings.TrimSpace(r.Name)
+		if seedName == "" {
+			seedName = short(r.PublicKey)
+		}
+
 		ct, known := byKey[pkLower]
+		// Flood (path unknown) brownouts weak USB; force zero-hop for poller-managed contacts.
+		// Keep a learned direct path (1–64) when the companion has heard an advert.
+		needZeroHop := !known || ct.OutPathLen == companion.OutPathUnknown
 		if known {
-			pathNote := "path unknown"
-			if ct.OutPathLen != 0xFF {
+			pathNote := "path unknown (will force zero-hop)"
+			if ct.OutPathLen != companion.OutPathUnknown {
 				pathNote = fmt.Sprintf("out_path_len=%d", ct.OutPathLen)
 			}
 			log.Printf("poll %s (%s): companion contact OK name=%q type=%s %s",
 				short(r.PublicKey), r.Name, ct.Name, ct.TypeLabel, pathNote)
-		} else {
-			log.Printf("poll %s (%s): not in companion contacts (%d known) — seeding via CMD_ADD_UPDATE_CONTACT",
-				short(r.PublicKey), r.Name, len(contacts))
-			seedName := strings.TrimSpace(r.Name)
-			if seedName == "" {
-				seedName = short(r.PublicKey)
+			if seedName == short(r.PublicKey) && ct.Name != "" {
+				seedName = ct.Name
 			}
-			if err := link.client.AddOrUpdateContact(r.PublicKey, companion.AdvTypeRepeater, seedName, 5*time.Second); err != nil {
-				if companion.IsDisconnected(err) {
-					link.close()
-					link, err = reconnectAfterDisconnect(serialPath, baud, err)
-					if err != nil {
-						snap.OK = false
-						snap.Error = disconnectHint(err)
-						snap.DurationMs = time.Since(start).Milliseconds()
-						_ = status.Upsert(link.info, snap)
-						log.Printf("poll %s (%s): FAIL %s — aborting cycle", short(r.PublicKey), r.Name, snap.Error)
-						return fmt.Errorf("companion reconnect failed: %w", err)
-					}
-					_ = status.SetCompanion(link.info)
-					// Retry seed once after reconnect.
-					if err := link.client.AddOrUpdateContact(r.PublicKey, companion.AdvTypeRepeater, seedName, 5*time.Second); err != nil {
-						log.Printf("poll %s (%s): seed contact FAIL %v", short(r.PublicKey), r.Name, err)
-					} else {
-						known = true
-					}
-				} else {
-					log.Printf("poll %s (%s): seed contact FAIL %v", short(r.PublicKey), r.Name, err)
-				}
-			} else {
-				known = true
-			}
+		}
+
+		if needZeroHop {
+			action := "seeding"
 			if known {
-				seeded := companion.Contact{
-					PublicKey:  r.PublicKey,
-					Name:       seedName,
-					Type:       companion.AdvTypeRepeater,
-					TypeLabel:  "repeater",
-					OutPathLen: companion.OutPathUnknown,
-				}
-				byKey[pkLower] = seeded
-				contacts = append(contacts, seeded)
-				contactsDirty = true
-				log.Printf("poll %s (%s): seeded on companion (flood path) name=%q", short(r.PublicKey), r.Name, seedName)
+				action = "forcing zero-hop path on"
 			}
+			log.Printf("poll %s (%s): %s companion contact via CMD_ADD_UPDATE_CONTACT (out_path_len=0)",
+				short(r.PublicKey), r.Name, action)
+			if err := ensureContact(link, serialPath, baud, status, r.PublicKey, seedName); err != nil {
+				snap.OK = false
+				snap.Error = disconnectHint(err)
+				snap.DurationMs = time.Since(start).Milliseconds()
+				_ = status.Upsert(link.info, snap)
+				if companion.IsDisconnected(err) {
+					log.Printf("poll %s (%s): FAIL %s — aborting cycle", short(r.PublicKey), r.Name, snap.Error)
+					return fmt.Errorf("companion reconnect failed: %w", err)
+				}
+				log.Printf("poll %s (%s): FAIL %v", short(r.PublicKey), r.Name, err)
+				continue
+			}
+			seeded := companion.Contact{
+				PublicKey:  r.PublicKey,
+				Name:       seedName,
+				Type:       companion.AdvTypeRepeater,
+				TypeLabel:  "repeater",
+				OutPathLen: companion.OutPathZeroHop,
+			}
+			byKey[pkLower] = seeded
+			if !known {
+				contacts = append(contacts, seeded)
+			} else {
+				for i := range contacts {
+					if strings.EqualFold(contacts[i].PublicKey, r.PublicKey) {
+						contacts[i] = seeded
+						break
+					}
+				}
+			}
+			contactsDirty = true
+			known = true
+			log.Printf("poll %s (%s): companion contact ready (zero-hop) name=%q", short(r.PublicKey), r.Name, seedName)
 		}
 
 		pass, err := vault.DecryptAdminPassword(r.PublicKey)
@@ -264,7 +272,9 @@ func pollOnce(vault *repeatervault.Store, status *companion.StatusStore, serialP
 			}
 			link = re
 			_ = status.SetCompanion(link.info)
-			log.Printf("poll %s (%s): retrying login after reconnect", short(r.PublicKey), r.Name)
+			// Re-assert zero-hop after reconnect — contact table may still say flood.
+			_ = link.client.AddOrUpdateContact(r.PublicKey, companion.AdvTypeRepeater, seedName, companion.OutPathZeroHop, 5*time.Second)
+			log.Printf("poll %s (%s): retrying zero-hop login after reconnect", short(r.PublicKey), r.Name)
 			login, st, err = link.client.LoginAndStatus(r.PublicKey, pass, timeout)
 		}
 
@@ -275,8 +285,17 @@ func pollOnce(vault *repeatervault.Store, status *companion.StatusStore, serialP
 			case companion.IsDisconnected(err):
 				snap.Error = disconnectHint(err)
 				_ = status.Upsert(link.info, snap)
-				log.Printf("poll %s (%s): FAIL %s — aborting cycle", short(r.PublicKey), r.Name, snap.Error)
-				return fmt.Errorf("companion disconnected during login: %w", err)
+				log.Printf("poll %s (%s): FAIL %s — skipping to next repeater", short(r.PublicKey), r.Name, snap.Error)
+				// Link is dead; reconnect so remaining repeaters can still be tried.
+				link.close()
+				re, rerr := reconnectAfterDisconnect(serialPath, baud, err)
+				if rerr != nil {
+					log.Printf("poll cycle: reconnect after skip failed: %v — aborting", rerr)
+					return fmt.Errorf("companion reconnect failed: %w", rerr)
+				}
+				link = re
+				_ = status.SetCompanion(link.info)
+				continue
 			case errors.Is(err, companion.ErrNotFound):
 				snap.Error = companion.NotFoundHint(r.PublicKey, contacts)
 			default:
@@ -301,12 +320,32 @@ func pollOnce(vault *repeatervault.Store, status *companion.StatusStore, serialP
 	return nil
 }
 
+// ensureContact adds/updates a vaulted repeater as a zero-hop companion contact.
+func ensureContact(link *liveLink, serialPath string, baud int, status *companion.StatusStore, pubKey, name string) error {
+	err := link.client.AddOrUpdateContact(pubKey, companion.AdvTypeRepeater, name, companion.OutPathZeroHop, 5*time.Second)
+	if err == nil {
+		return nil
+	}
+	if !companion.IsDisconnected(err) {
+		return err
+	}
+	link.close()
+	re, rerr := reconnectAfterDisconnect(serialPath, baud, err)
+	if rerr != nil {
+		*link = *re
+		return rerr
+	}
+	*link = *re
+	_ = status.SetCompanion(link.info)
+	return link.client.AddOrUpdateContact(pubKey, companion.AdvTypeRepeater, name, companion.OutPathZeroHop, 5*time.Second)
+}
+
 func disconnectHint(err error) string {
 	base := "companion USB disconnected during RF TX"
 	if err != nil {
 		base = base + " (" + err.Error() + ")"
 	}
-	return base + " — often a power brownout on flood TX; use a powered hub / better supply, or wait for the companion to hear an advert (direct path uses less TX). Poller will reconnect next cycle."
+	return base + " — often a power brownout on TX; use a powered hub / better supply. Poller forces zero-hop (not flood) for seeded contacts; if this persists, check companion power and that nothing else has the serial port open."
 }
 
 func logContacts(contacts []companion.Contact, reported uint32) {

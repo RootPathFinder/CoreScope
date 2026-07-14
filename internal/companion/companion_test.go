@@ -368,7 +368,7 @@ func TestIsDisconnectedAndWrap(t *testing.T) {
 
 func TestBuildAddUpdateContact(t *testing.T) {
 	pk := bytes.Repeat([]byte{0xFE}, 32)
-	frame, err := BuildAddUpdateContact(pk, AdvTypeRepeater, 0, "Hilltop")
+	frame, err := BuildAddUpdateContact(pk, AdvTypeRepeater, 0, OutPathZeroHop, "Hilltop")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,12 +376,16 @@ func TestBuildAddUpdateContact(t *testing.T) {
 	if len(frame) != wantLen || frame[0] != CmdAddUpdateContact {
 		t.Fatalf("len=%d code=%02x", len(frame), frame[0])
 	}
-	if frame[1+PubKeySize] != AdvTypeRepeater || frame[1+PubKeySize+2] != OutPathUnknown {
+	if frame[1+PubKeySize] != AdvTypeRepeater || frame[1+PubKeySize+2] != OutPathZeroHop {
 		t.Fatalf("type/path=%02x %02x", frame[1+PubKeySize], frame[1+PubKeySize+2])
 	}
 	nameOff := 1 + PubKeySize + 3 + MaxPathSize
 	if string(frame[nameOff:nameOff+7]) != "Hilltop" {
 		t.Fatalf("name=%q", string(frame[nameOff:nameOff+32]))
+	}
+	flood, err := BuildAddUpdateContact(pk, AdvTypeRepeater, 0, OutPathUnknown, "Hilltop")
+	if err != nil || flood[1+PubKeySize+2] != OutPathUnknown {
+		t.Fatalf("flood path byte: %v", err)
 	}
 }
 
@@ -391,7 +395,7 @@ func TestClientAddOrUpdateContact(t *testing.T) {
 		{{RespOK}},
 	}}
 	c := NewClient(port, "test")
-	if err := c.AddOrUpdateContact(pkHex, AdvTypeRepeater, "Hilltop", time.Second); err != nil {
+	if err := c.AddOrUpdateContact(pkHex, AdvTypeRepeater, "Hilltop", OutPathZeroHop, time.Second); err != nil {
 		t.Fatal(err)
 	}
 }

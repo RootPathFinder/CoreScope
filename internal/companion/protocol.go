@@ -50,6 +50,8 @@ const (
 
 	// OutPathUnknown is firmware OUT_PATH_UNKNOWN — login uses flood routing.
 	OutPathUnknown = 0xFF
+	// OutPathZeroHop is an empty direct path — login uses zero-hop TX (less energy than flood).
+	OutPathZeroHop = 0
 )
 
 var (
@@ -126,8 +128,9 @@ func BuildGetContacts() []byte {
 }
 
 // BuildAddUpdateContact builds CMD_ADD_UPDATE_CONTACT for a new/updated contact.
-// out_path_len=OutPathUnknown lets the companion flood-route login until a path is learned.
-func BuildAddUpdateContact(pk []byte, advType, flags uint8, name string) ([]byte, error) {
+// Use OutPathZeroHop for poller-seeded contacts (avoids flood TX brownouts on USB power).
+// Use OutPathUnknown only when intentionally requesting flood routing.
+func BuildAddUpdateContact(pk []byte, advType, flags, outPathLen uint8, name string) ([]byte, error) {
 	if len(pk) != PubKeySize {
 		return nil, ErrBadPubkey
 	}
@@ -144,9 +147,9 @@ func BuildAddUpdateContact(pk []byte, advType, flags uint8, name string) ([]byte
 	i++
 	frame[i] = flags
 	i++
-	frame[i] = OutPathUnknown
+	frame[i] = outPathLen
 	i++
-	i += MaxPathSize // zero out_path
+	i += MaxPathSize // zero out_path bytes
 	copy(frame[i:], []byte(name))
 	return frame, nil
 }
