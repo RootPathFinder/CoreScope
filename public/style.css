@@ -5623,5 +5623,26 @@ body.embed #app.app-fixed {
 .managed-repeaters-page .mr-pill-ok { color: var(--status-green, #45644c); border-color: currentColor; }
 .managed-repeaters-page .mr-pill-bad { color: var(--status-red, #b54a4a); border-color: currentColor; }
 .managed-repeaters-page .mr-pill-muted { color: var(--text-muted, #6b7280); }
+.managed-repeaters-page .mr-pill-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.25rem;
+}
+.managed-repeaters-page .mr-contact-list {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.managed-repeaters-page .mr-contact-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+}
 .managed-repeaters-page .mr-err { color: var(--status-red, #b54a4a); margin: 0.25rem 0; }
 

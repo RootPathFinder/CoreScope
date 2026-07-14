@@ -34,8 +34,16 @@ assert.strictEqual(ctx.window.ManagedRepeatersPage.fmtUptime(90), '1m');
 assert.strictEqual(typeof ctx.window.ManagedRepeatersPage.promptAddMonitoring, 'function', 'promptAddMonitoring exported');
 assert.strictEqual(typeof ctx.window.ManagedRepeatersPage.addMonitoringClick, 'function', 'addMonitoringClick exported');
 assert.ok(src.includes('mr-cards'), 'UI renders monitoring cards');
+assert.ok(src.includes('mr-contacts'), 'UI renders companion contacts panel');
+assert.ok(src.includes('companionKnown'), 'UI surfaces companionKnown flag');
+assert.ok(src.includes('On companion'), 'UI labels vaulted nodes known to companion');
 assert.ok(src.includes('CMD_SEND_LOGIN') === false, 'no protocol constants leaked into UI');
 assert.ok(src.includes('companion-poller'), 'UI mentions companion poller');
+
+const deployYml = fs.readFileSync(path.join(__dirname, '.github/workflows/deploy.yml'), 'utf8');
+assert.ok(/build-and-publish:[\s\S]*?needs:\s*\[go-test\]/.test(deployYml), 'build-and-publish waits on go-test only (not e2e)');
+assert.ok(deployYml.includes("vars.STAGING_ENABLED == 'true'"), 'deploy staging gated by STAGING_ENABLED');
+assert.ok(deployYml.includes('needs: [build-and-publish, e2e-test, deploy]'), 'badge publish does not hard-require staging');
 
 const nodesSrc = fs.readFileSync(path.join(__dirname, 'public/nodes.js'), 'utf8');
 assert.ok(nodesSrc.includes('addMonitorBtn'), 'node detail has Add to monitoring button');

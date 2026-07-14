@@ -53,7 +53,7 @@
     return (secs / 86400).toFixed(1) + 'd';
   }
 
-  function renderCompanion(companion, statusAt) {
+  function renderCompanion(companion, statusAt, contactCount) {
     var el = _root.querySelector('#mr-companion');
     if (!el) return;
     if (!companion) {
@@ -61,13 +61,44 @@
       return;
     }
     var ok = !!companion.ok;
+    var n = (typeof contactCount === 'number') ? contactCount
+      : (typeof companion.contactCount === 'number' ? companion.contactCount : null);
     el.innerHTML =
       '<div class="mr-companion-row">'
       + '<span class="mr-pill ' + (ok ? 'mr-pill-ok' : 'mr-pill-bad') + '">' + (ok ? 'Companion up' : 'Companion down') + '</span>'
       + '<span class="text-muted">' + esc(companion.port || '') + (companion.baud ? (' @ ' + companion.baud) : '') + '</span>'
+      + (n != null ? '<span class="text-muted">' + esc(String(n)) + ' contact' + (n === 1 ? '' : 's') + '</span>' : '')
       + (statusAt ? '<span class="text-muted">status ' + esc(statusAt) + '</span>' : '')
       + (companion.lastError ? '<span class="mr-err">' + esc(companion.lastError) + '</span>' : '')
       + '</div>';
+  }
+
+  function renderContacts(contacts, contactsAt) {
+    var el = _root.querySelector('#mr-contacts');
+    if (!el) return;
+    if (!contacts || !contacts.length) {
+      el.innerHTML =
+        '<h3>Companion contacts</h3>'
+        + '<p class="text-muted">None yet. The USB companion only monitors nodes it has as contacts '
+        + '(heard advert / added in MeshCore app). MQTT visibility alone is not enough.</p>'
+        + (contactsAt ? '<p class="text-muted">Last contact sync ' + esc(contactsAt) + '</p>' : '');
+      return;
+    }
+    var rows = contacts.map(function (c) {
+      var name = c.name || shortKey(c.publicKey);
+      var path = (c.outPathLen === 255 || c.outPathLen == null) ? 'path ?' : ('path ' + c.outPathLen);
+      return '<li class="mr-contact-item">'
+        + '<strong>' + esc(name) + '</strong> '
+        + '<span class="mr-pill mr-pill-muted">' + esc(c.typeLabel || ('type' + c.type)) + '</span> '
+        + '<code title="' + esc(c.publicKey) + '">' + esc(shortKey(c.publicKey)) + '</code> '
+        + '<span class="text-muted">' + esc(path) + '</span>'
+        + '</li>';
+    }).join('');
+    el.innerHTML =
+      '<h3>Companion contacts <span class="text-muted">(' + contacts.length + ')</span></h3>'
+      + '<p class="text-muted">Nodes the USB companion can address. Vaulted repeaters must appear here before polling works.</p>'
+      + '<ul class="mr-contact-list">' + rows + '</ul>'
+      + (contactsAt ? '<p class="text-muted">Synced ' + esc(contactsAt) + '</p>' : '');
   }
 
   function renderCards(repeaters) {
@@ -82,6 +113,8 @@
       var stats = poll && poll.stats ? poll.stats : null;
       var statusClass = !poll ? 'mr-pill-muted' : (poll.ok ? 'mr-pill-ok' : 'mr-pill-bad');
       var statusLabel = !poll ? 'Never polled' : (poll.ok ? 'Online' : 'Poll failed');
+      var knownClass = r.companionKnown ? 'mr-pill-ok' : 'mr-pill-bad';
+      var knownLabel = r.companionKnown ? 'On companion' : 'Not on companion';
       var body = '';
       if (stats) {
         body =
@@ -95,6 +128,8 @@
           + '</div>';
       } else if (poll && poll.error) {
         body = '<p class="mr-err">' + esc(poll.error) + '</p>';
+      } else if (!r.companionKnown) {
+        body = '<p class="text-muted">Waiting for the USB companion to learn this node (flood advert / MeshCore app contact add).</p>';
       } else {
         body = '<p class="text-muted">Waiting for companion-poller…</p>';
       }
@@ -102,7 +137,10 @@
         + '<header class="mr-monitor-head">'
         +   '<div><strong>' + esc(r.name || shortKey(r.publicKey)) + '</strong>'
         +   '<div class="text-muted"><code title="' + esc(r.publicKey) + '">' + esc(shortKey(r.publicKey)) + '</code></div></div>'
-        +   '<span class="mr-pill ' + statusClass + '">' + statusLabel + '</span>'
+        +   '<div class="mr-pill-stack">'
+        +     '<span class="mr-pill ' + knownClass + '">' + knownLabel + '</span>'
+        +     '<span class="mr-pill ' + statusClass + '">' + statusLabel + '</span>'
+        +   '</div>'
         + '</header>'
         + body
         + '<footer class="mr-monitor-foot text-muted">'
@@ -118,7 +156,7 @@
     var tbody = _root.querySelector('#mr-tbody');
     if (!tbody) return;
     if (!repeaters || !repeaters.length) {
-      tbody.innerHTML = '<tr><td colspan="5" class="text-muted">No managed repeaters yet. Add one above.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="6" class="text-muted">No managed repeaters yet. Add one above.</td></tr>';
       return;
     }
     tbody.innerHTML = repeaters.map(function (r) {
@@ -131,15 +169,28 @@
         + '<td><code title="' + esc(r.publicKey) + '">' + esc(shortKey(r.publicKey)) + '</code></td>'
         + '<td>' + esc(r.name || '—') + '</td>'
         + '<td>' + (r.hasAdminPassword ? 'saved' : 'missing') + '</td>'
+        + '<td>' + (r.companionKnown ? 'yes' : 'no') + '</td>'
         + '<td>' + esc(pollCell) + '</td>'
         + '<td><button type="button" class="btn btn-sm" data-action="delete" data-id="' + esc(r.id) + '">Remove</button></td>'
         + '</tr>';
     }).join('');
   }
 
+  function applyStatusBody(body) {
+    body = body || {};
+    var list = body.repeaters || [];
+    renderList(list);
+    renderCards(list);
+    renderCompanion(body.companion, body.statusUpdatedAt, body.contactCount);
+    renderContacts(body.contacts || [], body.contactsAt || '');
+    return list;
+  }
+
   async function refresh(silent) {
     if (!apiKey()) {
       if (!silent) showMsg('Enter your apiKey (from config.json) to manage repeaters.', false);
+      renderCompanion(null);
+      renderContacts([], '');
       renderList([]);
       renderCards([]);
       return;
@@ -149,12 +200,10 @@
       var body = await res.json().catch(function () { return {}; });
       if (!res.ok) {
         if (!silent) showMsg((body && body.error) || ('List failed (' + res.status + ')'), false);
+        applyStatusBody(body);
         return;
       }
-      var list = body.repeaters || [];
-      renderList(list);
-      renderCards(list);
-      renderCompanion(body.companion, body.statusUpdatedAt);
+      var list = applyStatusBody(body);
       if (!silent) showMsg('Loaded ' + list.length + ' repeater(s).', true);
     } catch (err) {
       if (!silent) showMsg('List failed: ' + (err && err.message || err), false);
@@ -227,6 +276,7 @@
       + '<p class="text-muted">Encrypted admin passwords + live status from the local USB companion poller '
       + '(login → status). Companion must already know each repeater as a contact (heard advert).</p>'
       + '<div class="mr-card" id="mr-companion"><p class="text-muted">Checking companion…</p></div>'
+      + '<div class="mr-card" id="mr-contacts"><p class="text-muted">Loading companion contacts…</p></div>'
       + '<div class="mr-card">'
       +   '<label class="mr-label">API key <input type="password" id="mr-apikey" autocomplete="off" placeholder="apiKey from config.json"></label>'
       +   '<p class="text-muted mr-hint">Stored only in this browser (localStorage). Required for vault operations.</p>'
@@ -245,8 +295,8 @@
       + '<div class="mr-card">'
       +   '<h3>Registry</h3>'
       +   '<table class="analytics-table" id="mr-table">'
-      +     '<thead><tr><th>Pubkey</th><th>Name</th><th>Password</th><th>Battery</th><th></th></tr></thead>'
-      +     '<tbody id="mr-tbody"><tr><td colspan="5" class="text-muted">Loading…</td></tr></tbody>'
+      +     '<thead><tr><th>Pubkey</th><th>Name</th><th>Password</th><th>Companion</th><th>Battery</th><th></th></tr></thead>'
+      +     '<tbody id="mr-tbody"><tr><td colspan="6" class="text-muted">Loading…</td></tr></tbody>'
       +   '</table>'
       + '</div>'
       + '</div>';

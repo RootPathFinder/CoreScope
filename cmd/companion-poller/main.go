@@ -7,12 +7,14 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -93,14 +95,37 @@ func pollOnce(vault *repeatervault.Store, status *companion.StatusStore, serialP
 		return fmt.Errorf("handshake: %w", err)
 	}
 
+	contactsTimeout := timeout
+	if contactsTimeout < 30*time.Second {
+		contactsTimeout = 30 * time.Second
+	}
+	contacts, reportedTotal, cerr := client.GetContacts(contactsTimeout)
+	if cerr != nil {
+		log.Printf("get_contacts: FAIL %v (partial=%d reported=%d)", cerr, len(contacts), reportedTotal)
+		info.LastError = "get_contacts: " + cerr.Error()
+		// Keep whatever we got so the UI still shows something useful.
+	} else {
+		info.LastError = ""
+	}
+	info.ContactCount = len(contacts)
+	_ = status.SetContacts(info, contacts)
+	logContacts(contacts, reportedTotal)
+
+	byKey := make(map[string]companion.Contact, len(contacts))
+	for _, c := range contacts {
+		byKey[strings.ToLower(c.PublicKey)] = c
+	}
+	contactsDirty := false
+
 	list, err := vault.List()
 	if err != nil {
 		return err
 	}
 	if len(list) == 0 {
-		log.Printf("no managed repeaters in vault")
+		log.Printf("no managed repeaters in vault (companion contacts=%d)", len(contacts))
 		return nil
 	}
+	log.Printf("polling %d managed repeater(s); companion contacts=%d", len(list), len(contacts))
 
 	for i, r := range list {
 		if i > 0 {
@@ -112,6 +137,40 @@ func pollOnce(vault *repeatervault.Store, status *companion.StatusStore, serialP
 			Name:      r.Name,
 			PolledAt:  time.Now().UTC(),
 		}
+		pkLower := strings.ToLower(r.PublicKey)
+		ct, known := byKey[pkLower]
+		if known {
+			pathNote := "path unknown"
+			if ct.OutPathLen != 0xFF {
+				pathNote = fmt.Sprintf("out_path_len=%d", ct.OutPathLen)
+			}
+			log.Printf("poll %s (%s): companion contact OK name=%q type=%s %s",
+				short(r.PublicKey), r.Name, ct.Name, ct.TypeLabel, pathNote)
+		} else {
+			log.Printf("poll %s (%s): not in companion contacts (%d known) — seeding via CMD_ADD_UPDATE_CONTACT",
+				short(r.PublicKey), r.Name, len(contacts))
+			seedName := strings.TrimSpace(r.Name)
+			if seedName == "" {
+				seedName = short(r.PublicKey)
+			}
+			if err := client.AddOrUpdateContact(r.PublicKey, companion.AdvTypeRepeater, seedName, 5*time.Second); err != nil {
+				log.Printf("poll %s (%s): seed contact FAIL %v", short(r.PublicKey), r.Name, err)
+			} else {
+				seeded := companion.Contact{
+					PublicKey:  r.PublicKey,
+					Name:       seedName,
+					Type:       companion.AdvTypeRepeater,
+					TypeLabel:  "repeater",
+					OutPathLen: companion.OutPathUnknown,
+				}
+				byKey[pkLower] = seeded
+				contacts = append(contacts, seeded)
+				contactsDirty = true
+				known = true
+				log.Printf("poll %s (%s): seeded on companion (flood path) name=%q", short(r.PublicKey), r.Name, seedName)
+			}
+		}
+
 		pass, err := vault.DecryptAdminPassword(r.PublicKey)
 		if err != nil {
 			snap.OK = false
@@ -123,11 +182,13 @@ func pollOnce(vault *repeatervault.Store, status *companion.StatusStore, serialP
 		snap.DurationMs = time.Since(start).Milliseconds()
 		if err != nil {
 			snap.OK = false
-			snap.Error = err.Error()
-			if login.PubKeyPref != "" {
-				// keep partial login info
+			if errors.Is(err, companion.ErrNotFound) {
+				snap.Error = companion.NotFoundHint(r.PublicKey, contacts)
+			} else {
+				snap.Error = err.Error()
 			}
-			log.Printf("poll %s (%s): FAIL %v", short(r.PublicKey), r.Name, err)
+			log.Printf("poll %s (%s): FAIL %s", short(r.PublicKey), r.Name, snap.Error)
+			_ = login // keep partial for future enrichment
 		} else {
 			snap.OK = true
 			snap.IsAdmin = login.IsAdmin
@@ -138,7 +199,27 @@ func pollOnce(vault *repeatervault.Store, status *companion.StatusStore, serialP
 		}
 		_ = status.Upsert(info, snap)
 	}
+	if contactsDirty {
+		info.ContactCount = len(contacts)
+		_ = status.SetContacts(info, contacts)
+	}
 	return nil
+}
+
+func logContacts(contacts []companion.Contact, reported uint32) {
+	if len(contacts) == 0 {
+		log.Printf("companion contacts: 0 (reported total=%d) — managed logins will fail until the USB companion hears adverts", reported)
+		return
+	}
+	parts := make([]string, 0, len(contacts))
+	for _, c := range contacts {
+		label := c.Name
+		if label == "" {
+			label = short(c.PublicKey)
+		}
+		parts = append(parts, fmt.Sprintf("%s[%s/%s]", label, short(c.PublicKey), c.TypeLabel))
+	}
+	log.Printf("companion contacts: %d (reported total=%d): %s", len(contacts), reported, strings.Join(parts, ", "))
 }
 
 func short(pk string) string {

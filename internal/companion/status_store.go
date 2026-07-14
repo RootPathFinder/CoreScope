@@ -22,18 +22,22 @@ type PollSnapshot struct {
 
 // StatusFile is the on-disk poll status document under data/.
 type StatusFile struct {
-	UpdatedAt time.Time                `json:"updatedAt"`
-	Companion CompanionInfo            `json:"companion"`
-	Repeaters map[string]PollSnapshot  `json:"repeaters"`
+	UpdatedAt    time.Time               `json:"updatedAt"`
+	Companion    CompanionInfo           `json:"companion"`
+	Contacts     []Contact               `json:"contacts,omitempty"`
+	ContactsAt   time.Time               `json:"contactsAt,omitempty"`
+	ContactCount int                     `json:"contactCount,omitempty"`
+	Repeaters    map[string]PollSnapshot `json:"repeaters"`
 }
 
 // CompanionInfo describes the local USB companion link.
 type CompanionInfo struct {
-	Port      string    `json:"port"`
-	Baud      int       `json:"baud"`
-	OK        bool      `json:"ok"`
-	LastError string    `json:"lastError,omitempty"`
-	LastOpen  time.Time `json:"lastOpen,omitempty"`
+	Port         string    `json:"port"`
+	Baud         int       `json:"baud"`
+	OK           bool      `json:"ok"`
+	LastError    string    `json:"lastError,omitempty"`
+	LastOpen     time.Time `json:"lastOpen,omitempty"`
+	ContactCount int       `json:"contactCount,omitempty"`
 }
 
 const statusFileName = "managed-repeater-status.json"
@@ -128,5 +132,21 @@ func (s *StatusStore) SetCompanion(info CompanionInfo) error {
 		return err
 	}
 	doc.Companion = info
+	return s.saveLocked(doc)
+}
+
+// SetContacts replaces the companion contact book snapshot used by the UI.
+func (s *StatusStore) SetContacts(info CompanionInfo, contacts []Contact) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	doc, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	info.ContactCount = len(contacts)
+	doc.Companion = info
+	doc.Contacts = append([]Contact(nil), contacts...)
+	doc.ContactCount = len(contacts)
+	doc.ContactsAt = time.Now().UTC()
 	return s.saveLocked(doc)
 }

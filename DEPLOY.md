@@ -16,6 +16,11 @@ Examples:
 
 If the package is private, configure Portainer to use a GitHub Container Registry credential with `read:packages` scope.
 
+### CI notes for forks
+
+- `:edge` is published after the **Go Build & Test** job (not after Playwright). Playwright still runs in parallel.
+- **Deploy Staging** only runs when the repository variable `STAGING_ENABLED` is set to `true` *and* a self-hosted runner labeled `meshcore-runner-2` is available. Leave it unset for Portainer-only forks so CI is not blocked waiting for a runner that does not exist.
+
 ## Managed repeaters (admin password vault + companion poller)
 
 CoreScope can store admin credentials for remote MeshCore repeaters and poll them over RF via a local **USB Serial Companion**.
@@ -31,14 +36,17 @@ CoreScope can store admin credentials for remote MeshCore repeaters and poll the
 
 Binary: `/app/corescope-companion-poller` (same image).
 
-It opens the companion serial port, logs into each vaulted repeater (`CMD_SEND_LOGIN`), requests status (`CMD_SEND_STATUS_REQ`), and writes `/app/data/managed-repeater-status.json`. The CoreScope server merges that into `GET /api/managed-repeaters` (`poll.stats`: battery, uptime, noise, SNR, packet counters).
+It opens the companion serial port, lists contacts (`CMD_GET_CONTACTS`), logs into each vaulted repeater (`CMD_SEND_LOGIN`), requests status (`CMD_SEND_STATUS_REQ`), and writes `/app/data/managed-repeater-status.json`. The CoreScope server merges that into `GET /api/managed-repeaters` (`poll.stats`, `companionKnown`, and `contacts[]`).
+
+Poller logs are verbose on failure: contact count, whether the pubkey is among companion contacts, and a hint to flood an advert toward the USB companion (MQTT knowing a node is not enough).
 
 **Requirements:**
 
 - Companion flashed as **Serial Companion** firmware (not repeater)
 - Device mounted into the poller container (e.g. `/dev/ttyACM1`)
-- Each managed repeater must already be a **contact** on that companion (it must have heard an advert / been added once via the MeshCore app)
+- Each managed repeater must be reachable by the USB companion. If it is not already a contact, the poller **seeds** it via `CMD_ADD_UPDATE_CONTACT` (flood path) before login; hearing a live advert is still best for direct routing.
 - Admin passwords ≤ **15 characters** (companion protocol limit)
+- UI `#/repeaters` shows companion contacts and marks each vaulted repeater as **On companion** / **Not on companion**
 
 **Portainer sidecar example:**
 

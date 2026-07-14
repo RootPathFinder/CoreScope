@@ -47,3 +47,28 @@ func TestStatusStoreRoundTrip(t *testing.T) {
 		t.Fatalf("path=%s", store.Path())
 	}
 }
+
+func TestStatusStoreSetContacts(t *testing.T) {
+	dir := t.TempDir()
+	store := OpenStatusStore(dir)
+	info := CompanionInfo{Port: "/dev/ttyACM1", Baud: 115200, OK: true}
+	contacts := []Contact{
+		{PublicKey: "aa", Name: "R1", Type: AdvTypeRepeater, TypeLabel: "repeater", OutPathLen: 255},
+	}
+	if err := store.SetContacts(info, contacts); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.ContactCount != 1 || len(doc.Contacts) != 1 || doc.Contacts[0].Name != "R1" {
+		t.Fatalf("doc=%+v", doc)
+	}
+	if doc.Companion.ContactCount != 1 {
+		t.Fatalf("companion count=%d", doc.Companion.ContactCount)
+	}
+	if doc.ContactsAt.IsZero() {
+		t.Fatal("contactsAt unset")
+	}
+}

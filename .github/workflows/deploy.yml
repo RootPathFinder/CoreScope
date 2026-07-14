@@ -21,9 +21,11 @@ env:
   STAGING_SERVICE: staging-go
   STAGING_CONTAINER: corescope-staging-go
 
-# Pipeline (sequential, fail-fast):
-#   go-test → e2e-test → build-and-publish → deploy → publish-badges
-#   PRs stop after build-and-publish (no GHCR push). Master continues to deploy + badges.
+# Pipeline:
+#   go-test → build-and-publish (:edge after Go/JS unit tests — does NOT wait for Playwright)
+#           ↘ e2e-test (Playwright, parallel with image publish)
+#   Master only: deploy staging (gated by vars.STAGING_ENABLED) → publish badges
+#   PRs stop after build-and-publish (no GHCR push).
 
 jobs:
   # ───────────────────────────────────────────────────────────────
@@ -574,7 +576,9 @@ jobs:
   # ───────────────────────────────────────────────────────────────
   build-and-publish:
     name: "🏗️ Build & Publish Docker Image"
-    needs: [e2e-test]
+    # Publish :edge as soon as Go/JS unit tests pass — do not wait for Playwright (~17m).
+    # E2E still runs in parallel and remains a required check for merge quality.
+    needs: [go-test]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -692,13 +696,18 @@ jobs:
             corescope-decrypt-linux-arm64
 
   # ───────────────────────────────────────────────────────────────
-  # 4b. Deploy Staging (master only)
+  # 4b. Deploy Staging (master only, opt-in)
+  # Requires repository variable STAGING_ENABLED=true AND a self-hosted
+  # runner labeled meshcore-runner-2. Forks / Portainer-only deploys leave
+  # the variable unset so this job is skipped (avoids hung "waiting for
+  # runner" that blocks concurrency for the whole CI group).
   # ───────────────────────────────────────────────────────────────
   deploy:
     name: "🚀 Deploy Staging"
     if: |
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
       && github.ref == 'refs/heads/master'
+      && vars.STAGING_ENABLED == 'true'
     needs: [build-and-publish]
     runs-on: [self-hosted, meshcore-runner-2]
     steps:
@@ -783,12 +792,16 @@ jobs:
           docker system df
 
   # ───────────────────────────────────────────────────────────────
-  # 5. Publish Badges & Summary (master only)
+  # 5. Publish Badges & Summary (master push only)
+  # Does not require staging deploy (skipped on forks without STAGING_ENABLED).
   # ───────────────────────────────────────────────────────────────
   publish:
     name: "📝 Publish Badges & Summary"
-    if: github.event_name == 'push'
-    needs: [deploy]
+    if: |
+      always()
+      && github.event_name == 'push'
+      && needs.build-and-publish.result == 'success'
+    needs: [build-and-publish, e2e-test, deploy]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -841,6 +854,10 @@ jobs:
 
       - name: Post deployment summary
         run: |
-          echo "## Staging Deployed ✓" >> $GITHUB_STEP_SUMMARY
+          echo "## CI publish complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Commit:** \`$(git rev-parse --short HEAD)\` — $(git log -1 --format=%s)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Build & Publish: \`${{ needs.build-and-publish.result }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Playwright E2E: \`${{ needs.e2e-test.result }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Deploy Staging: \`${{ needs.deploy.result }}\` (requires \`vars.STAGING_ENABLED=true\`)" >> $GITHUB_STEP_SUMMARY
