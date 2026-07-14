@@ -289,6 +289,66 @@ func TestClientLoginAndStatus(t *testing.T) {
 	}
 }
 
+// framedEOFPort serves any pre-queued radio frames, then returns io.EOF —
+// simulating the companion dropping the USB CDC link mid-command.
+type framedEOFPort struct {
+	mu   sync.Mutex
+	buf  bytes.Buffer
+	dead time.Time
+}
+
+func (p *framedEOFPort) queue(payload []byte) {
+	var b bytes.Buffer
+	_ = WriteFrame(&b, payload)
+	raw := b.Bytes()
+	raw[0] = frameOutMarker
+	p.mu.Lock()
+	p.buf.Write(raw)
+	p.mu.Unlock()
+}
+func (p *framedEOFPort) Read(b []byte) (int, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.buf.Len() > 0 {
+		return p.buf.Read(b)
+	}
+	return 0, io.EOF
+}
+func (p *framedEOFPort) Write(b []byte) (int, error)       { return len(b), nil }
+func (p *framedEOFPort) Close() error                      { return nil }
+func (p *framedEOFPort) SetReadDeadline(t time.Time) error { p.dead = t; return nil }
+
+func TestLoginStageErrors(t *testing.T) {
+	pkHex := hex.EncodeToString(bytes.Repeat([]byte{0x33}, 32))
+
+	// Case 1: drop before RESP_CODE_SENT (pre-TX packet build crash).
+	preTX := &framedEOFPort{}
+	_, _, err := NewClient(preTX, "t").LoginAndStatus(pkHex, "pw", 500*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "no RESP_CODE_SENT") {
+		t.Fatalf("pre-TX stage err=%v", err)
+	}
+	if !IsDisconnected(err) {
+		t.Fatalf("pre-TX should preserve disconnect chain: %v", err)
+	}
+
+	// Case 2: RESP_CODE_SENT arrives, then link drops awaiting login reply.
+	postTX := &framedEOFPort{}
+	sent := make([]byte, 10)
+	sent[0] = RespMsgSent
+	binary.LittleEndian.PutUint32(sent[6:10], 1000)
+	postTX.queue(sent)
+	_, _, err = NewClient(postTX, "t").LoginAndStatus(pkHex, "pw", 500*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "after RESP_CODE_SENT") {
+		t.Fatalf("post-TX stage err=%v", err)
+	}
+	if !strings.Contains(err.Error(), "direct/zero-hop") {
+		t.Fatalf("post-TX should note routing: %v", err)
+	}
+	if !IsDisconnected(err) {
+		t.Fatalf("post-TX should preserve disconnect chain: %v", err)
+	}
+}
+
 func TestParseContactAndNotFoundHint(t *testing.T) {
 	pk := bytes.Repeat([]byte{0xab}, 32)
 	frame := make([]byte, ContactFrameMin)

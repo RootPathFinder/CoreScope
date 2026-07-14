@@ -199,9 +199,11 @@ func (c *Client) LoginAndStatus(pubKeyHex, password string, timeout time.Duratio
 		return login, status, err
 	}
 
+	// Stage 1: RESP_CODE_SENT confirms the firmware built + queued the login
+	// packet (ECDH/crypto done). Failing here = reset BEFORE any RF transmit.
 	ack, err := c.waitSentOrErr(timeout)
 	if err != nil {
-		return login, status, err
+		return login, status, fmt.Errorf("login: no RESP_CODE_SENT — companion reset before transmitting (login packet build, pre-TX): %w", err)
 	}
 	wait := ack.SuggestedTimeout
 	if wait < 2*time.Second {
@@ -210,9 +212,11 @@ func (c *Client) LoginAndStatus(pubKeyHex, password string, timeout time.Duratio
 	if timeout > wait {
 		wait = timeout
 	}
+	// Stage 2: reply arrives after the RF round-trip. Failing here = drop
+	// during/after the actual transmit (packet already built OK).
 	login, err = c.waitLoginPush(wait)
 	if err != nil {
-		return login, status, err
+		return login, status, fmt.Errorf("login: dropped after RESP_CODE_SENT (%s TX queued, est %s) awaiting reply: %w", ackRouting(ack), ack.SuggestedTimeout, err)
 	}
 	if !login.OK {
 		return login, status, ErrLoginFailed
@@ -227,7 +231,7 @@ func (c *Client) LoginAndStatus(pubKeyHex, password string, timeout time.Duratio
 	}
 	ack, err = c.waitSentOrErr(timeout)
 	if err != nil {
-		return login, status, err
+		return login, status, fmt.Errorf("status_req: no RESP_CODE_SENT after successful login (pre-TX reset): %w", err)
 	}
 	wait = ack.SuggestedTimeout
 	if wait < 2*time.Second {
@@ -237,7 +241,18 @@ func (c *Client) LoginAndStatus(pubKeyHex, password string, timeout time.Duratio
 		wait = timeout
 	}
 	status, err = c.waitStatusPush(wait)
-	return login, status, err
+	if err != nil {
+		return login, status, fmt.Errorf("status_req: dropped after RESP_CODE_SENT (%s, est %s) awaiting reply: %w", ackRouting(ack), ack.SuggestedTimeout, err)
+	}
+	return login, status, nil
+}
+
+// ackRouting labels how the firmware queued the request (flood vs direct).
+func ackRouting(a SentAck) string {
+	if a.Flood {
+		return "flood"
+	}
+	return "direct/zero-hop"
 }
 
 // AddOrUpdateContact seeds or updates a contact on the companion.

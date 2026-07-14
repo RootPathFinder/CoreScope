@@ -621,11 +621,20 @@ func ensureContact(link *liveLink, serialPath string, baud int, status *companio
 }
 
 func disconnectHint(err error) string {
-	base := "companion USB disconnected during RF TX"
+	msg := ""
 	if err != nil {
-		base = base + " (" + err.Error() + ")"
+		msg = err.Error()
 	}
-	return base + " — serial dropped while handling CMD_SEND_LOGIN (before or during RESP_CODE_SENT). Commands match meshcore_py; poller uses zero-hop for seeded contacts. Check: only one process owns the tty, companion firmware is stable on RF TX, and (if multi-hop) the contact has a learned path — not only power."
+	switch {
+	case strings.Contains(msg, "no RESP_CODE_SENT"):
+		// Reset happened before RESP_CODE_SENT → before any RF transmit.
+		return "companion reset BEFORE transmitting (" + msg + ") — the link dropped while the firmware was building the login packet (ECDH/crypto), before any RF TX was dispatched. A zero-hop self-advert TX succeeds on this device, so this is a firmware crash on CMD_SEND_LOGIN, NOT USB power or antenna. Try: update companion firmware, confirm the repeater's public key is valid, and report the crash upstream if it persists."
+	case strings.Contains(msg, "after RESP_CODE_SENT"):
+		// RESP_CODE_SENT arrived → packet built OK; drop is during/after TX.
+		return "companion dropped DURING/AFTER the login RF transmit (" + msg + ") — RESP_CODE_SENT arrived, so packet build succeeded. Since a zero-hop self-advert TX works but login does not, suspect login-packet airtime/power draw or firmware TX handling for secure requests (not the command format)."
+	default:
+		return "companion USB disconnected during login (" + msg + ") — only one process may own the tty. A zero-hop self-advert TX works on this device, so the read path and basic RF TX are fine; focus on the login/secure-request path."
+	}
 }
 
 func logContacts(contacts []companion.Contact, reported uint32) {
