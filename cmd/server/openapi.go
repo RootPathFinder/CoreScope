@@ -50,8 +50,11 @@ func routeDescriptions() map[string]routeMeta {
 		"GET /api/mqtt/status": {Summary: "MQTT source status", Description: "Returns per-MQTT-source connection state and counters (lastConnectUnix, lastPacketUnix, packetsTotal, etc.). Broker URL passwords are masked. Sourced from the ingestor stats file; empty list when unavailable. (#1043)", Tag: "admin"},
 		"POST /api/perf/reset": {Summary: "Reset performance stats", Tag: "admin", Auth: true},
 		// "POST /api/admin/prune" removed in #1283 (ingestor owns prune).
-		"GET /api/debug/affinity": {Summary: "Debug neighbor affinity scores", Tag: "admin", Auth: true},
-		"GET /api/backup":         {Summary: "Download SQLite backup", Description: "Streams a consistent SQLite snapshot of the analyzer DB (VACUUM INTO). Response is application/octet-stream with attachment filename corescope-backup-<unix>.db.", Tag: "admin", Auth: true},
+		"GET /api/debug/affinity":  {Summary: "Debug neighbor affinity scores", Tag: "admin", Auth: true},
+		"GET /api/backup":          {Summary: "Download SQLite backup", Description: "Streams a consistent SQLite snapshot of the analyzer DB (VACUUM INTO). Response is application/octet-stream with attachment filename corescope-backup-<unix>.db.", Tag: "admin", Auth: true},
+		"POST /api/companion/test": {Summary: "Enqueue USB companion self-test", Description: "Writes a marker request for companion-poller to run OpenSerial → APP_START → GET_CONTACTS (no RF login). Returns 202 with an id; poll GET /api/companion/test/status.", Tag: "admin", Auth: true},
+		"GET /api/companion/test/status": {Summary: "USB companion self-test status", Description: "Returns pending or done for a previously enqueued companion USB self-test (query id=).", Tag: "admin", Auth: true,
+			QueryParams: []paramMeta{{Name: "id", Description: "Self-test request id from POST /api/companion/test", Type: "string", Required: true}}},
 
 		// Packets
 		"GET /api/packets": {Summary: "List packets", Description: "Returns decoded packets with filtering, sorting, and pagination.", Tag: "packets",

@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -50,23 +51,40 @@ func main() {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 
+	// Serial is exclusive: scheduled RF poll and on-demand USB self-test share one mutex.
+	var serialMu sync.Mutex
+
 	runCycle := func() {
+		serialMu.Lock()
+		defer serialMu.Unlock()
 		if err := pollOnce(vault, status, *serialPath, *baud, *perTimeout); err != nil {
 			log.Printf("poll cycle error: %v", err)
 		}
 	}
 
+	drainTests := func() {
+		serialMu.Lock()
+		defer serialMu.Unlock()
+		processPendingUSBTests(*configDir, status, *serialPath, *baud)
+	}
+
 	runCycle()
+	drainTests()
 	if *once {
 		return
 	}
 
-	ticker := time.NewTicker(*interval)
-	defer ticker.Stop()
+	lastPoll := time.Now()
+	tick := time.NewTicker(1 * time.Second)
+	defer tick.Stop()
 	for {
 		select {
-		case <-ticker.C:
-			runCycle()
+		case <-tick.C:
+			drainTests()
+			if time.Since(lastPoll) >= *interval {
+				runCycle()
+				lastPoll = time.Now()
+			}
 		case sig := <-stop:
 			log.Printf("stopped (%v)", sig)
 			return
@@ -318,6 +336,84 @@ func pollOnce(vault *repeatervault.Store, status *companion.StatusStore, serialP
 		_ = status.SetContacts(link.info, contacts)
 	}
 	return nil
+}
+
+// processPendingUSBTests runs queued UI self-tests (Open + APP_START + GET_CONTACTS, no RF login).
+func processPendingUSBTests(configDir string, status *companion.StatusStore, serialPath string, baud int) {
+	pending, err := companion.ListPendingTestRequests(configDir)
+	if err != nil || len(pending) == 0 {
+		return
+	}
+	for _, path := range pending {
+		req, err := companion.ReadTestRequest(path)
+		if err != nil || req == nil || req.ID == "" {
+			log.Printf("companion usb-test: skip bad request %s: %v", path, err)
+			_ = os.Remove(path)
+			continue
+		}
+		log.Printf("companion usb-test %s: starting (open → app_start → get_contacts)", req.ID)
+		res := runUSBSelfTest(req, status, serialPath, baud)
+		if err := companion.WriteTestResult(configDir, res); err != nil {
+			log.Printf("companion usb-test %s: write result: %v", req.ID, err)
+			continue
+		}
+		if res.OK {
+			log.Printf("companion usb-test %s: OK contacts=%d duration=%dms", req.ID, res.ContactCount, res.DurationMs)
+		} else {
+			log.Printf("companion usb-test %s: FAIL %s duration=%dms", req.ID, res.Error, res.DurationMs)
+		}
+	}
+}
+
+// runUSBSelfTest opens the companion, handshakes, and lists contacts — no RF TX / login.
+func runUSBSelfTest(req *companion.TestRequest, status *companion.StatusStore, serialPath string, baud int) companion.TestResult {
+	start := time.Now()
+	res := companion.TestResult{
+		ID:          req.ID,
+		RequestedAt: req.RequestedAt,
+		Port:        serialPath,
+		Baud:        baud,
+		Steps:       []string{},
+	}
+	link, err := openCompanion(serialPath, baud)
+	if err != nil {
+		res.CompletedAt = time.Now().UTC()
+		res.DurationMs = time.Since(start).Milliseconds()
+		res.OK = false
+		res.Error = link.info.LastError
+		if res.Error == "" {
+			res.Error = err.Error()
+		}
+		_ = status.SetCompanion(link.info)
+		return res
+	}
+	defer link.close()
+	res.Steps = append(res.Steps, "open", "app_start")
+	_ = status.SetCompanion(link.info)
+
+	contacts, reported, cerr := link.client.GetContacts(30 * time.Second)
+	res.Steps = append(res.Steps, "get_contacts")
+	link.info.ContactCount = len(contacts)
+	if cerr != nil {
+		link.info.LastError = "get_contacts: " + cerr.Error()
+		link.info.OK = false
+		_ = status.SetContacts(link.info, contacts)
+		res.CompletedAt = time.Now().UTC()
+		res.DurationMs = time.Since(start).Milliseconds()
+		res.OK = false
+		res.Error = link.info.LastError
+		res.ContactCount = len(contacts)
+		_ = reported
+		return res
+	}
+	link.info.LastError = ""
+	link.info.OK = true
+	_ = status.SetContacts(link.info, contacts)
+	res.CompletedAt = time.Now().UTC()
+	res.DurationMs = time.Since(start).Milliseconds()
+	res.OK = true
+	res.ContactCount = len(contacts)
+	return res
 }
 
 // ensureContact adds/updates a vaulted repeater as a zero-hop companion contact.
