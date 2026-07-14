@@ -48,6 +48,100 @@ func (c *Client) Handshake(timeout time.Duration) error {
 	return nil
 }
 
+// AppStartInfo sends CMD_APP_START and returns the parsed RESP_CODE_SELF_INFO.
+// Unlike Handshake it strictly requires the self-info reply and returns the
+// device's own public key / node name / radio params — proof the device answered.
+func (c *Client) AppStartInfo(timeout time.Duration) (SelfInfo, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	if err := WriteFrame(c.port, BuildAppStart(c.appName)); err != nil {
+		return SelfInfo{}, err
+	}
+	frame, err := c.awaitResp(RespSelfInfo, timeout)
+	if err != nil {
+		return SelfInfo{}, err
+	}
+	return ParseSelfInfo(frame)
+}
+
+// QueryDeviceInfo sends CMD_DEVICE_QUERY and returns RESP_CODE_DEVICE_INFO
+// (firmware version, build date, manufacturer) straight off the wire.
+func (c *Client) QueryDeviceInfo(timeout time.Duration) (DeviceInfo, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	if err := WriteFrame(c.port, BuildDeviceQuery()); err != nil {
+		return DeviceInfo{}, err
+	}
+	frame, err := c.awaitResp(RespDeviceInfo, timeout)
+	if err != nil {
+		return DeviceInfo{}, err
+	}
+	return ParseDeviceInfo(frame)
+}
+
+// GetBattStorage sends CMD_GET_BATT_AND_STORAGE and returns battery mV + storage.
+func (c *Client) GetBattStorage(timeout time.Duration) (BattStorage, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	if err := WriteFrame(c.port, BuildGetBattStorage()); err != nil {
+		return BattStorage{}, err
+	}
+	frame, err := c.awaitResp(RespBattStorage, timeout)
+	if err != nil {
+		return BattStorage{}, err
+	}
+	return ParseBattStorage(frame)
+}
+
+// SendSelfAdvert emits CMD_SEND_SELF_ADVERT and waits for RESP_CODE_OK.
+// flood=false is a single zero-hop TX — the minimal RF transmit, used to test
+// whether transmitting drops the USB link without logging into any repeater.
+func (c *Client) SendSelfAdvert(flood bool, timeout time.Duration) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if timeout <= 0 {
+		timeout = 8 * time.Second
+	}
+	if err := WriteFrame(c.port, BuildSelfAdvert(flood)); err != nil {
+		return err
+	}
+	_, err := c.awaitResp(RespOK, timeout)
+	return err
+}
+
+// awaitResp reads frames until one matches want, mapping RESP_CODE_ERR to an
+// error and skipping unsolicited pushes. Caller must hold c.mu.
+func (c *Client) awaitResp(want byte, timeout time.Duration) ([]byte, error) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		frame, err := ReadFrameWithDeadline(c.port, c.fr, time.Until(deadline))
+		if err != nil {
+			return nil, err
+		}
+		if len(frame) == 0 {
+			continue
+		}
+		switch frame[0] {
+		case want:
+			return frame, nil
+		case RespError:
+			return nil, MapErrorCode(ParseErrorCode(frame))
+		default:
+			continue // ignore unsolicited pushes / stale replies
+		}
+	}
+	return nil, ErrTimeout
+}
+
 // LoginAndStatus authenticates to a remote repeater then requests status.
 func (c *Client) LoginAndStatus(pubKeyHex, password string, timeout time.Duration) (LoginPush, StatusPush, error) {
 	c.mu.Lock()

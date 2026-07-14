@@ -5646,3 +5646,18 @@ body.embed #app.app-fixed {
 }
 .managed-repeaters-page .mr-err { color: var(--status-red, #b54a4a); margin: 0.25rem 0; }
 
+.managed-repeaters-page .mr-test-btns { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
+.managed-repeaters-page .mr-diag-id { margin: 0.4rem 0 0.25rem; font-size: 0.85rem; }
+.managed-repeaters-page .mr-diag-steps {
+  list-style: none; margin: 0.25rem 0 0; padding: 0;
+  font-size: 0.82rem; line-height: 1.5;
+}
+.managed-repeaters-page .mr-diag-steps li { display: block; }
+.managed-repeaters-page .mr-diag-steps code {
+  display: inline-block; min-width: 8.5rem;
+  background: var(--bg-alt, rgba(127,127,127,0.08)); border-radius: 4px; padding: 0 0.3rem;
+}
+.managed-repeaters-page .mr-step-ok { color: var(--status-green, #45644c); }
+.managed-repeaters-page .mr-step-bad { color: var(--status-red, #b54a4a); }
+.managed-repeaters-page .mr-diag-err { margin-top: 0.4rem; }
+

@@ -14,7 +14,9 @@ import (
 const (
 	CmdAppStart         byte = 0x01
 	CmdGetContacts      byte = 0x04
+	CmdSendSelfAdvert   byte = 0x07 // CMD_SEND_SELF_ADVERT (byte1: 1=flood, 0/absent=zero-hop)
 	CmdAddUpdateContact byte = 0x09
+	CmdGetBattStorage   byte = 0x14 // CMD_GET_BATT_AND_STORAGE
 	CmdDeviceQuery      byte = 0x16
 	CmdSendLogin     byte = 0x1A
 	CmdSendStatusReq byte = 0x1B
@@ -28,6 +30,7 @@ const (
 	RespEndOfContacts byte = 0x04
 	RespSelfInfo      byte = 0x05
 	RespMsgSent       byte = 0x06
+	RespBattStorage   byte = 0x0C // RESP_CODE_BATT_AND_STORAGE
 	RespDeviceInfo    byte = 0x0D
 
 	PushLoginSuccess   byte = 0x85
@@ -125,6 +128,128 @@ func BuildDeviceQuery() []byte {
 // BuildGetContacts builds CMD_GET_CONTACTS (optional since filter omitted = full list).
 func BuildGetContacts() []byte {
 	return []byte{CmdGetContacts}
+}
+
+// BuildGetBattStorage builds CMD_GET_BATT_AND_STORAGE.
+func BuildGetBattStorage() []byte {
+	return []byte{CmdGetBattStorage}
+}
+
+// BuildSelfAdvert builds CMD_SEND_SELF_ADVERT.
+//
+// flood=false emits a zero-hop advert (single TX, no rebroadcast) — the minimal
+// RF transmit for diagnosing whether TX brownouts the USB link. flood=true asks
+// neighbours to rebroadcast (avoid for diagnostics; it spams the mesh).
+func BuildSelfAdvert(flood bool) []byte {
+	b := byte(0)
+	if flood {
+		b = 1
+	}
+	return []byte{CmdSendSelfAdvert, b}
+}
+
+// DeviceInfo is the parsed RESP_CODE_DEVICE_INFO (reply to CMD_DEVICE_QUERY).
+// It proves the companion is a real MeshCore device speaking the protocol —
+// the firmware version/build come straight off the wire, not assumed by us.
+type DeviceInfo struct {
+	FirmwareVerCode uint8  `json:"firmwareVerCode"`
+	MaxContacts     int    `json:"maxContacts,omitempty"`
+	MaxChannels     int    `json:"maxChannels,omitempty"`
+	FirmwareBuild   string `json:"firmwareBuild,omitempty"`
+	Manufacturer    string `json:"manufacturer,omitempty"`
+	FirmwareVersion string `json:"firmwareVersion,omitempty"`
+}
+
+// ParseDeviceInfo parses RESP_CODE_DEVICE_INFO. Layout (companion firmware):
+//
+//	code + ver_code + max_contacts/2 + max_channels + ble_pin(4)
+//	+ build_date(12) + manufacturer(40) + firmware_version(20) + ... (v9/v10 trailer)
+func ParseDeviceInfo(frame []byte) (DeviceInfo, error) {
+	var d DeviceInfo
+	if len(frame) < 4 || frame[0] != RespDeviceInfo {
+		return d, ErrProtocol
+	}
+	d.FirmwareVerCode = frame[1]
+	d.MaxContacts = int(frame[2]) * 2
+	d.MaxChannels = int(frame[3])
+	if len(frame) >= 20 {
+		d.FirmwareBuild = trimZ(frame[8:20])
+	}
+	if len(frame) >= 60 {
+		d.Manufacturer = trimZ(frame[20:60])
+	}
+	if len(frame) >= 80 {
+		d.FirmwareVersion = trimZ(frame[60:80])
+	}
+	return d, nil
+}
+
+// SelfInfo is the parsed RESP_CODE_SELF_INFO (reply to CMD_APP_START). It carries
+// the node's own public key, name and radio params as reported by the device.
+type SelfInfo struct {
+	AdvType    uint8  `json:"advType"`
+	TxPower    uint8  `json:"txPower"`
+	MaxTxPower uint8  `json:"maxTxPower"`
+	PublicKey  string `json:"publicKey"`
+	FreqHz     uint32 `json:"freqHz,omitempty"`
+	BandwidthK uint32 `json:"bandwidthK,omitempty"`
+	SF         uint8  `json:"sf,omitempty"`
+	CR         uint8  `json:"cr,omitempty"`
+	NodeName   string `json:"nodeName,omitempty"`
+}
+
+// ParseSelfInfo parses RESP_CODE_SELF_INFO. Layout (companion firmware):
+//
+//	code + adv_type + tx_power + max_tx_power + pubkey(32) + lat(4) + lon(4)
+//	+ multi_acks + advert_loc_policy + telemetry + manual_add + freq(4) + bw(4)
+//	+ sf + cr + node_name(rest)
+func ParseSelfInfo(frame []byte) (SelfInfo, error) {
+	var s SelfInfo
+	if len(frame) < 4+PubKeySize || frame[0] != RespSelfInfo {
+		return s, ErrProtocol
+	}
+	s.AdvType = frame[1]
+	s.TxPower = frame[2]
+	s.MaxTxPower = frame[3]
+	s.PublicKey = hex.EncodeToString(frame[4 : 4+PubKeySize])
+	// After pubkey(32): lat(4)+lon(4)+multi_acks+advert_loc_policy+telemetry+manual_add = 12
+	radioOff := 4 + PubKeySize + 12
+	if len(frame) >= radioOff+10 {
+		s.FreqHz = binary.LittleEndian.Uint32(frame[radioOff : radioOff+4])
+		s.BandwidthK = binary.LittleEndian.Uint32(frame[radioOff+4 : radioOff+8])
+		s.SF = frame[radioOff+8]
+		s.CR = frame[radioOff+9]
+		if len(frame) > radioOff+10 {
+			s.NodeName = trimZ(frame[radioOff+10:])
+		}
+	}
+	return s, nil
+}
+
+// BattStorage is the parsed RESP_CODE_BATT_AND_STORAGE.
+type BattStorage struct {
+	BatteryMv     uint16 `json:"batteryMv"`
+	StorageUsedKb uint32 `json:"storageUsedKb,omitempty"`
+	StorageTotKb  uint32 `json:"storageTotalKb,omitempty"`
+}
+
+// ParseBattStorage parses RESP_CODE_BATT_AND_STORAGE (batt_mv + used + total).
+func ParseBattStorage(frame []byte) (BattStorage, error) {
+	var b BattStorage
+	if len(frame) < 3 || frame[0] != RespBattStorage {
+		return b, ErrProtocol
+	}
+	b.BatteryMv = binary.LittleEndian.Uint16(frame[1:3])
+	if len(frame) >= 11 {
+		b.StorageUsedKb = binary.LittleEndian.Uint32(frame[3:7])
+		b.StorageTotKb = binary.LittleEndian.Uint32(frame[7:11])
+	}
+	return b, nil
+}
+
+// trimZ trims trailing NULs and surrounding whitespace from a fixed byte field.
+func trimZ(b []byte) string {
+	return strings.TrimSpace(strings.TrimRight(string(b), "\x00"))
 }
 
 // BuildAddUpdateContact builds CMD_ADD_UPDATE_CONTACT for a new/updated contact.

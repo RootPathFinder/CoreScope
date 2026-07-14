@@ -34,9 +34,12 @@ func TestTestQueueRoundTrip(t *testing.T) {
 	}
 	res := TestResult{
 		ID: id, RequestedAt: req.RequestedAt, CompletedAt: time.Now().UTC(),
-		OK: true, ContactCount: 4, DurationMs: 42, Steps: []string{"open", "app_start", "get_contacts"},
+		OK: true, Mode: TestModeUSB, ContactCount: 4, DurationMs: 42,
 		Port: "/dev/ttyACM1", Baud: 115200,
 	}
+	res.AddStep("open", true, "/dev/ttyACM1 @ 115200")
+	res.AddStep("app_start", true, "node=\"Hilltop\"")
+	res.AddStep("get_contacts", true, "4 contact(s)")
 	if err := WriteTestResult(dir, res); err != nil {
 		t.Fatal(err)
 	}
@@ -47,6 +50,9 @@ func TestTestQueueRoundTrip(t *testing.T) {
 	out, err := ReadTestResult(dir, id)
 	if err != nil || out == nil || !out.OK || out.ContactCount != 4 {
 		t.Fatalf("result: %+v %v", out, err)
+	}
+	if len(out.Steps) != 3 || out.Steps[0].Name != "open" || !out.Steps[0].OK {
+		t.Fatalf("steps: %+v", out.Steps)
 	}
 	if _, err := os.Stat(filepath.Join(TestQueueDir(dir), "result-"+id+".json")); err != nil {
 		t.Fatal(err)
@@ -60,5 +66,21 @@ func TestTestQueueRejectsBadID(t *testing.T) {
 	}
 	if _, err := TestRequestPath(dir, "not-hex!"); err == nil {
 		t.Fatal("expected reject")
+	}
+}
+
+func TestNormalizeTestMode(t *testing.T) {
+	cases := map[string]string{
+		"":         TestModeUSB,
+		"usb":      TestModeUSB,
+		"bogus":    TestModeUSB,
+		"advert":   TestModeAdvert,
+		"ADVERT":   TestModeAdvert,
+		" advert ": TestModeAdvert,
+	}
+	for in, want := range cases {
+		if got := NormalizeTestMode(in); got != want {
+			t.Fatalf("NormalizeTestMode(%q)=%q want %q", in, got, want)
+		}
 	}
 }

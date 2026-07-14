@@ -22,18 +22,20 @@ type CompanionUSBTestStatusResponse struct {
 }
 
 // handleCompanionUSBTest enqueues an on-demand USB companion self-test.
-// The companion-poller (serial owner) performs OpenSerial → APP_START →
-// GET_CONTACTS and writes a result marker. No RF login.
+// The companion-poller (serial owner) runs the diagnostic sequence and writes a
+// result marker. mode=usb (default) is read-only; mode=advert adds a zero-hop
+// self-advert to test RF TX in isolation.
 func (s *Server) handleCompanionUSBTest(w http.ResponseWriter, r *http.Request) {
 	if s.configDir == "" {
 		writeError(w, http.StatusServiceUnavailable, "config dir unavailable")
 		return
 	}
+	mode := companion.NormalizeTestMode(r.URL.Query().Get("mode"))
 	id := companion.NewTestID()
 	req := companion.TestRequest{
 		ID:          id,
 		RequestedAt: time.Now().UTC(),
-		Mode:        "usb",
+		Mode:        mode,
 	}
 	if err := companion.WriteTestRequest(s.configDir, req); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to enqueue companion USB test")
@@ -43,7 +45,7 @@ func (s *Server) handleCompanionUSBTest(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, CompanionUSBTestEnqueueResponse{
 		ID:        id,
 		StatusURL: "/api/companion/test/status?id=" + id,
-		Mode:      "usb",
+		Mode:      mode,
 	})
 }
 

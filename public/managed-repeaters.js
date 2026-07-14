@@ -57,12 +57,18 @@
   function renderCompanion(companion, statusAt, contactCount) {
     var el = _root.querySelector('#mr-companion');
     if (!el) return;
-    var testBtn =
-      '<button type="button" class="btn btn-sm" data-action="test-companion" id="mr-test-usb"'
+    var testBtns =
+      '<button type="button" class="btn btn-sm" data-action="test-companion" data-mode="usb" id="mr-test-usb"'
       + (_testingUSB ? ' disabled' : '')
-      + ' title="Open serial, APP_START, list contacts (no RF login)">'
+      + ' title="Read-only: open serial → APP_START (self-info) → DEVICE_QUERY (firmware) → battery → contacts. No RF transmit.">'
       + (_testingUSB ? 'Testing…' : 'Test USB')
+      + '</button>'
+      + '<button type="button" class="btn btn-sm" data-action="test-companion" data-mode="advert" id="mr-test-usb-tx"'
+      + (_testingUSB ? ' disabled' : '')
+      + ' title="Everything Test USB does, then sends one zero-hop self-advert (RF TX) to check whether transmitting drops the USB link.">'
+      + (_testingUSB ? 'Testing…' : 'Test USB + TX')
       + '</button>';
+    var testBtn = '<div class="mr-test-btns">' + testBtns + '</div>';
     if (!companion) {
       el.innerHTML =
         '<p class="text-muted">No companion-poller status yet. Deploy the poller service with <code>COMPANION_SERIAL=/dev/ttyACM1</code>.</p>'
@@ -272,8 +278,57 @@
     }
   }
 
-  async function onTestUSB() {
+  function renderTestResult(r) {
+    var el = _root && _root.querySelector('#mr-test-result');
+    if (!el) return;
+    if (!r) { el.hidden = true; el.innerHTML = ''; return; }
+    var rows = [];
+    var head = (r.ok ? 'PASS' : 'FAIL') + ' · ' + (r.mode === 'advert' ? 'USB + TX (self-advert)' : 'USB (read-only)')
+      + ' · ' + (r.durationMs || 0) + 'ms';
+    rows.push('<div class="mr-companion-row">'
+      + '<span class="mr-pill ' + (r.ok ? 'mr-pill-ok' : 'mr-pill-bad') + '">' + esc(head) + '</span>'
+      + '</div>');
+
+    // Device identity — proves the protocol works and the device really answered.
+    var idBits = [];
+    if (r.self) {
+      if (r.self.nodeName) idBits.push('node ' + esc(r.self.nodeName));
+      if (r.self.publicKey) idBits.push('pubkey ' + esc(shortKey(r.self.publicKey)));
+      if (typeof r.self.txPower === 'number') idBits.push('TX ' + r.self.txPower + '/' + (r.self.maxTxPower || '?') + ' dBm');
+      if (r.self.freqHz) idBits.push((r.self.freqHz / 1000000).toFixed(3) + ' MHz');
+    }
+    if (r.device) {
+      if (r.device.firmwareVersion) idBits.push('fw ' + esc(r.device.firmwareVersion));
+      if (r.device.firmwareBuild) idBits.push('build ' + esc(r.device.firmwareBuild));
+    }
+    if (r.battery && typeof r.battery.batteryMv === 'number') {
+      idBits.push('batt ' + (r.battery.batteryMv / 1000).toFixed(2) + ' V');
+    }
+    if (typeof r.contactCount === 'number') idBits.push(r.contactCount + ' contact' + (r.contactCount === 1 ? '' : 's'));
+    if (idBits.length) {
+      rows.push('<p class="text-muted mr-diag-id">' + idBits.map(esc).join(' · ') + '</p>');
+    }
+
+    // Per-step trace — each shows the device's actual reply, nothing assumed.
+    if (r.steps && r.steps.length) {
+      var items = r.steps.map(function (s) {
+        var mark = s.ok ? '✓' : '✗';
+        var cls = s.ok ? 'mr-step-ok' : 'mr-step-bad';
+        return '<li class="' + cls + '"><code>' + esc(s.name) + '</code> ' + mark
+          + (s.detail ? ' <span class="text-muted">' + esc(s.detail) + '</span>' : '') + '</li>';
+      }).join('');
+      rows.push('<ul class="mr-diag-steps">' + items + '</ul>');
+    }
+    if (!r.ok && r.error) {
+      rows.push('<p class="mr-err mr-diag-err">' + esc(r.error) + '</p>');
+    }
+    el.innerHTML = rows.join('');
+    el.hidden = false;
+  }
+
+  async function onTestUSB(mode) {
     if (_testingUSB) return;
+    mode = (mode === 'advert') ? 'advert' : 'usb';
     var keyInput = _root && _root.querySelector('#mr-apikey');
     if (keyInput) setApiKey(keyInput.value.trim());
     if (!apiKey()) {
@@ -281,14 +336,16 @@
       return;
     }
     _testingUSB = true;
-    var btn = _root.querySelector('#mr-test-usb');
-    if (btn) {
-      btn.disabled = true;
-      btn.textContent = 'Testing…';
-    }
-    showMsg('USB self-test queued (open → APP_START → contacts)…', true);
+    var btnIds = ['#mr-test-usb', '#mr-test-usb-tx'];
+    btnIds.forEach(function (sel) {
+      var b = _root.querySelector(sel);
+      if (b) { b.disabled = true; b.textContent = 'Testing…'; }
+    });
+    showMsg(mode === 'advert'
+      ? 'USB + TX self-test queued (identity → contacts → zero-hop advert)…'
+      : 'USB self-test queued (identity → firmware → battery → contacts)…', true);
     try {
-      var res = await fetch('/api/companion/test', { method: 'POST', headers: headers(false) });
+      var res = await fetch('/api/companion/test?mode=' + encodeURIComponent(mode), { method: 'POST', headers: headers(false) });
       var body = await res.json().catch(function () { return {}; });
       if (!res.ok) {
         showMsg((body && body.error) || ('Test failed (' + res.status + ')'), false);
@@ -313,8 +370,12 @@
         }
         if (last.status === 'done' && last.result) {
           var r = last.result;
+          renderTestResult(r);
           if (r.ok) {
-            showMsg('USB OK — ' + (r.contactCount || 0) + ' contact(s) in ' + (r.durationMs || 0) + 'ms.', true);
+            var okMsg = (r.mode === 'advert')
+              ? 'USB + TX OK — zero-hop advert transmitted, link survived (' + (r.durationMs || 0) + 'ms).'
+              : 'USB OK — device responded (' + (r.contactCount || 0) + ' contact(s), ' + (r.durationMs || 0) + 'ms).';
+            showMsg(okMsg, true);
           } else {
             showMsg('USB FAIL — ' + (r.error || 'unknown error'), false);
           }
@@ -328,18 +389,17 @@
       showMsg('USB test failed: ' + (err && err.message || err), false);
     } finally {
       _testingUSB = false;
-      btn = _root && _root.querySelector('#mr-test-usb');
-      if (btn) {
-        btn.disabled = false;
-        btn.textContent = 'Test USB';
-      }
+      var usb = _root && _root.querySelector('#mr-test-usb');
+      if (usb) { usb.disabled = false; usb.textContent = 'Test USB'; }
+      var tx = _root && _root.querySelector('#mr-test-usb-tx');
+      if (tx) { tx.disabled = false; tx.textContent = 'Test USB + TX'; }
     }
   }
 
   function onClick(ev) {
     var testBtn = ev.target && ev.target.closest ? ev.target.closest('[data-action="test-companion"]') : null;
     if (testBtn) {
-      onTestUSB();
+      onTestUSB(testBtn.getAttribute('data-mode') || 'usb');
       return;
     }
     var btn = ev.target && ev.target.closest ? ev.target.closest('[data-action="delete"]') : null;
@@ -355,6 +415,7 @@
       + '<p class="text-muted">Encrypted admin passwords + live status from the local USB companion poller '
       + '(login → status). Companion must already know each repeater as a contact (heard advert).</p>'
       + '<div class="mr-card" id="mr-companion"><p class="text-muted">Checking companion…</p></div>'
+      + '<div class="mr-card" id="mr-test-result" hidden></div>'
       + '<div class="mr-card" id="mr-contacts"><p class="text-muted">Loading companion contacts…</p></div>'
       + '<div class="mr-card">'
       +   '<label class="mr-label">API key <input type="password" id="mr-apikey" autocomplete="off" placeholder="apiKey from config.json"></label>'

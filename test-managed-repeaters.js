@@ -39,6 +39,11 @@ assert.ok(src.includes('companionKnown'), 'UI surfaces companionKnown flag');
 assert.ok(src.includes('On companion'), 'UI labels vaulted nodes known to companion');
 assert.ok(src.includes('data-action="test-companion"'), 'UI has Test USB companion control');
 assert.ok(src.includes('/api/companion/test'), 'UI calls companion USB self-test API');
+assert.ok(src.includes('data-mode="advert"'), 'UI has Test USB + TX (advert) button');
+assert.ok(src.includes('mode=advert') || src.includes("'advert'"), 'UI sends advert mode');
+assert.ok(src.includes('renderTestResult'), 'UI renders diagnostic result panel');
+assert.ok(src.includes('mr-diag-steps'), 'UI renders per-step diagnostic trace');
+assert.ok(src.includes('firmwareVersion'), 'UI surfaces device firmware version');
 assert.ok(src.includes('CMD_SEND_LOGIN') === false, 'no protocol constants leaked into UI');
 assert.ok(src.includes('companion-poller'), 'UI mentions companion poller');
 
