@@ -109,6 +109,46 @@ func (c *Client) LoginAndStatus(pubKeyHex, password string, timeout time.Duratio
 	return login, status, err
 }
 
+// AddOrUpdateContact seeds a contact on the companion (flood path until advert heard).
+func (c *Client) AddOrUpdateContact(pubKeyHex string, advType uint8, name string, timeout time.Duration) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	pk, err := DecodePubKey(pubKeyHex)
+	if err != nil {
+		return err
+	}
+	frame, err := BuildAddUpdateContact(pk, advType, 0, name)
+	if err != nil {
+		return err
+	}
+	if err := WriteFrame(c.port, frame); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		resp, err := ReadFrameWithDeadline(c.port, c.fr, time.Until(deadline))
+		if err != nil {
+			return err
+		}
+		if len(resp) == 0 {
+			continue
+		}
+		switch resp[0] {
+		case RespOK:
+			return nil
+		case RespError:
+			return MapErrorCode(ParseErrorCode(resp))
+		default:
+			continue
+		}
+	}
+	return ErrTimeout
+}
+
 // GetContacts sends CMD_GET_CONTACTS and drains START → CONTACT* → END.
 // Contacts are streamed one-per-loop by companion firmware, so timeout should
 // be generous (tens of seconds) when the contact book is large.

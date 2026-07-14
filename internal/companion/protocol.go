@@ -11,9 +11,10 @@ import (
 
 // Companion protocol command / response codes (MeshCore companion radio).
 const (
-	CmdAppStart      byte = 0x01
-	CmdGetContacts   byte = 0x04
-	CmdDeviceQuery   byte = 0x16
+	CmdAppStart         byte = 0x01
+	CmdGetContacts      byte = 0x04
+	CmdAddUpdateContact byte = 0x09
+	CmdDeviceQuery      byte = 0x16
 	CmdSendLogin     byte = 0x1A
 	CmdSendStatusReq byte = 0x1B
 	CmdLogout        byte = 0x1D
@@ -45,6 +46,9 @@ const (
 	AdvTypeRepeater = 2
 	AdvTypeRoom     = 3
 	AdvTypeSensor   = 4
+
+	// OutPathUnknown is firmware OUT_PATH_UNKNOWN — login uses flood routing.
+	OutPathUnknown = 0xFF
 )
 
 var (
@@ -86,6 +90,32 @@ func BuildDeviceQuery() []byte {
 // BuildGetContacts builds CMD_GET_CONTACTS (optional since filter omitted = full list).
 func BuildGetContacts() []byte {
 	return []byte{CmdGetContacts}
+}
+
+// BuildAddUpdateContact builds CMD_ADD_UPDATE_CONTACT for a new/updated contact.
+// out_path_len=OutPathUnknown lets the companion flood-route login until a path is learned.
+func BuildAddUpdateContact(pk []byte, advType, flags uint8, name string) ([]byte, error) {
+	if len(pk) != PubKeySize {
+		return nil, ErrBadPubkey
+	}
+	if len(name) > 32 {
+		name = name[:32]
+	}
+	frame := make([]byte, 1+PubKeySize+1+1+1+MaxPathSize+32)
+	i := 0
+	frame[i] = CmdAddUpdateContact
+	i++
+	copy(frame[i:], pk)
+	i += PubKeySize
+	frame[i] = advType
+	i++
+	frame[i] = flags
+	i++
+	frame[i] = OutPathUnknown
+	i++
+	i += MaxPathSize // zero out_path
+	copy(frame[i:], []byte(name))
+	return frame, nil
 }
 
 // Contact is one companion contact from RESP_CODE_CONTACT.

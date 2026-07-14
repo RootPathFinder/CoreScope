@@ -115,6 +115,7 @@ func pollOnce(vault *repeatervault.Store, status *companion.StatusStore, serialP
 	for _, c := range contacts {
 		byKey[strings.ToLower(c.PublicKey)] = c
 	}
+	contactsDirty := false
 
 	list, err := vault.List()
 	if err != nil {
@@ -146,8 +147,28 @@ func pollOnce(vault *repeatervault.Store, status *companion.StatusStore, serialP
 			log.Printf("poll %s (%s): companion contact OK name=%q type=%s %s",
 				short(r.PublicKey), r.Name, ct.Name, ct.TypeLabel, pathNote)
 		} else {
-			log.Printf("poll %s (%s): WARN not in companion contacts (%d known) — login will likely fail with ERR_CODE_NOT_FOUND",
+			log.Printf("poll %s (%s): not in companion contacts (%d known) — seeding via CMD_ADD_UPDATE_CONTACT",
 				short(r.PublicKey), r.Name, len(contacts))
+			seedName := strings.TrimSpace(r.Name)
+			if seedName == "" {
+				seedName = short(r.PublicKey)
+			}
+			if err := client.AddOrUpdateContact(r.PublicKey, companion.AdvTypeRepeater, seedName, 5*time.Second); err != nil {
+				log.Printf("poll %s (%s): seed contact FAIL %v", short(r.PublicKey), r.Name, err)
+			} else {
+				seeded := companion.Contact{
+					PublicKey:  r.PublicKey,
+					Name:       seedName,
+					Type:       companion.AdvTypeRepeater,
+					TypeLabel:  "repeater",
+					OutPathLen: companion.OutPathUnknown,
+				}
+				byKey[pkLower] = seeded
+				contacts = append(contacts, seeded)
+				contactsDirty = true
+				known = true
+				log.Printf("poll %s (%s): seeded on companion (flood path) name=%q", short(r.PublicKey), r.Name, seedName)
+			}
 		}
 
 		pass, err := vault.DecryptAdminPassword(r.PublicKey)
@@ -177,6 +198,10 @@ func pollOnce(vault *repeatervault.Store, status *companion.StatusStore, serialP
 				short(r.PublicKey), r.Name, stats.BatteryMv, stats.UptimeSecs, login.IsAdmin)
 		}
 		_ = status.Upsert(info, snap)
+	}
+	if contactsDirty {
+		info.ContactCount = len(contacts)
+		_ = status.SetContacts(info, contacts)
 	}
 	return nil
 }

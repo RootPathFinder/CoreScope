@@ -342,4 +342,34 @@ func TestClientGetContacts(t *testing.T) {
 	}
 }
 
+func TestBuildAddUpdateContact(t *testing.T) {
+	pk := bytes.Repeat([]byte{0xFE}, 32)
+	frame, err := BuildAddUpdateContact(pk, AdvTypeRepeater, 0, "Hilltop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantLen := 1 + PubKeySize + 1 + 1 + 1 + MaxPathSize + 32
+	if len(frame) != wantLen || frame[0] != CmdAddUpdateContact {
+		t.Fatalf("len=%d code=%02x", len(frame), frame[0])
+	}
+	if frame[1+PubKeySize] != AdvTypeRepeater || frame[1+PubKeySize+2] != OutPathUnknown {
+		t.Fatalf("type/path=%02x %02x", frame[1+PubKeySize], frame[1+PubKeySize+2])
+	}
+	nameOff := 1 + PubKeySize + 3 + MaxPathSize
+	if string(frame[nameOff:nameOff+7]) != "Hilltop" {
+		t.Fatalf("name=%q", string(frame[nameOff:nameOff+32]))
+	}
+}
+
+func TestClientAddOrUpdateContact(t *testing.T) {
+	pkHex := hex.EncodeToString(bytes.Repeat([]byte{0xFE}, 32))
+	port := &scriptedPort{reads: [][][]byte{
+		{{RespOK}},
+	}}
+	c := NewClient(port, "test")
+	if err := c.AddOrUpdateContact(pkHex, AdvTypeRepeater, "Hilltop", time.Second); err != nil {
+		t.Fatal(err)
+	}
+}
+
 var _ io.Reader = (*mockPort)(nil)

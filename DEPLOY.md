@@ -44,7 +44,7 @@ Poller logs are verbose on failure: contact count, whether the pubkey is among c
 
 - Companion flashed as **Serial Companion** firmware (not repeater)
 - Device mounted into the poller container (e.g. `/dev/ttyACM1`)
-- Each managed repeater must already be a **contact** on that companion (it must have heard an advert / been added once via the MeshCore app)
+- Each managed repeater must be reachable by the USB companion. If it is not already a contact, the poller **seeds** it via `CMD_ADD_UPDATE_CONTACT` (flood path) before login; hearing a live advert is still best for direct routing.
 - Admin passwords ≤ **15 characters** (companion protocol limit)
 - UI `#/repeaters` shows companion contacts and marks each vaulted repeater as **On companion** / **Not on companion**
 
