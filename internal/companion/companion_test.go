@@ -423,6 +423,146 @@ func TestBuildAddUpdateContact(t *testing.T) {
 	}
 }
 
+func TestParseDeviceInfo(t *testing.T) {
+	frame := make([]byte, 82)
+	frame[0] = RespDeviceInfo
+	frame[1] = 10 // FIRMWARE_VER_CODE
+	frame[2] = 50 // MAX_CONTACTS/2 -> 100
+	frame[3] = 8  // MAX_GROUP_CHANNELS
+	copy(frame[8:20], []byte("1 Jan 2026\x00"))
+	copy(frame[20:60], []byte("Heltec\x00"))
+	copy(frame[60:80], []byte("v1.2.3\x00"))
+	d, err := ParseDeviceInfo(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.FirmwareVerCode != 10 || d.MaxContacts != 100 || d.MaxChannels != 8 {
+		t.Fatalf("device=%+v", d)
+	}
+	if d.FirmwareVersion != "v1.2.3" || d.FirmwareBuild != "1 Jan 2026" || d.Manufacturer != "Heltec" {
+		t.Fatalf("device strings=%+v", d)
+	}
+	if _, err := ParseDeviceInfo([]byte{RespOK, 1, 2, 3}); err != ErrProtocol {
+		t.Fatalf("bad code err=%v", err)
+	}
+}
+
+func TestParseSelfInfo(t *testing.T) {
+	pk := bytes.Repeat([]byte{0x7a}, PubKeySize)
+	radioOff := 4 + PubKeySize + 12
+	frame := make([]byte, radioOff+10+7)
+	frame[0] = RespSelfInfo
+	frame[1] = AdvTypeChat
+	frame[2] = 20 // tx power
+	frame[3] = 22 // max tx power
+	copy(frame[4:4+PubKeySize], pk)
+	binary.LittleEndian.PutUint32(frame[radioOff:radioOff+4], 915000000)
+	binary.LittleEndian.PutUint32(frame[radioOff+4:radioOff+8], 250000)
+	frame[radioOff+8] = 11 // sf
+	frame[radioOff+9] = 5  // cr
+	copy(frame[radioOff+10:], []byte("MyNode\x00"))
+	s, err := ParseSelfInfo(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.TxPower != 20 || s.MaxTxPower != 22 || s.AdvType != AdvTypeChat {
+		t.Fatalf("self=%+v", s)
+	}
+	if s.PublicKey != hex.EncodeToString(pk) || s.NodeName != "MyNode" {
+		t.Fatalf("self id=%+v", s)
+	}
+	if s.FreqHz != 915000000 || s.BandwidthK != 250000 || s.SF != 11 || s.CR != 5 {
+		t.Fatalf("self radio=%+v", s)
+	}
+}
+
+func TestParseBattStorage(t *testing.T) {
+	frame := make([]byte, 11)
+	frame[0] = RespBattStorage
+	binary.LittleEndian.PutUint16(frame[1:3], 3810)
+	binary.LittleEndian.PutUint32(frame[3:7], 128)
+	binary.LittleEndian.PutUint32(frame[7:11], 4096)
+	b, err := ParseBattStorage(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.BatteryMv != 3810 || b.StorageUsedKb != 128 || b.StorageTotKb != 4096 {
+		t.Fatalf("batt=%+v", b)
+	}
+	// short frame: battery only, no storage
+	short := []byte{RespBattStorage, 0x10, 0x0e}
+	b2, err := ParseBattStorage(short)
+	if err != nil || b2.BatteryMv != 0x0e10 {
+		t.Fatalf("short batt=%+v err=%v", b2, err)
+	}
+}
+
+func TestBuildSelfAdvertAndBattStorage(t *testing.T) {
+	if got := BuildSelfAdvert(false); len(got) != 2 || got[0] != CmdSendSelfAdvert || got[1] != 0 {
+		t.Fatalf("zero-hop advert=%x", got)
+	}
+	if got := BuildSelfAdvert(true); got[1] != 1 {
+		t.Fatalf("flood advert=%x", got)
+	}
+	if got := BuildGetBattStorage(); len(got) != 1 || got[0] != CmdGetBattStorage {
+		t.Fatalf("batt cmd=%x", got)
+	}
+}
+
+func TestClientDiagnosticMethods(t *testing.T) {
+	pk := bytes.Repeat([]byte{0x55}, PubKeySize)
+	radioOff := 4 + PubKeySize + 12
+	self := make([]byte, radioOff+10+4)
+	self[0] = RespSelfInfo
+	self[2] = 17
+	copy(self[4:4+PubKeySize], pk)
+	copy(self[radioOff+10:], []byte("Node"))
+
+	dev := make([]byte, 82)
+	dev[0] = RespDeviceInfo
+	dev[1] = 9
+	copy(dev[60:80], []byte("v2\x00"))
+
+	batt := make([]byte, 11)
+	batt[0] = RespBattStorage
+	binary.LittleEndian.PutUint16(batt[1:3], 3700)
+
+	port := &scriptedPort{reads: [][][]byte{
+		{self},          // AppStartInfo
+		{dev},           // QueryDeviceInfo
+		{batt},          // GetBattStorage
+		{{RespOK}},      // SendSelfAdvert (zero-hop)
+	}}
+	c := NewClient(port, "diag")
+
+	si, err := c.AppStartInfo(time.Second)
+	if err != nil || si.PublicKey != hex.EncodeToString(pk) || si.NodeName != "Node" || si.TxPower != 17 {
+		t.Fatalf("AppStartInfo=%+v err=%v", si, err)
+	}
+	di, err := c.QueryDeviceInfo(time.Second)
+	if err != nil || di.FirmwareVersion != "v2" || di.FirmwareVerCode != 9 {
+		t.Fatalf("QueryDeviceInfo=%+v err=%v", di, err)
+	}
+	bs, err := c.GetBattStorage(time.Second)
+	if err != nil || bs.BatteryMv != 3700 {
+		t.Fatalf("GetBattStorage=%+v err=%v", bs, err)
+	}
+	if err := c.SendSelfAdvert(false, time.Second); err != nil {
+		t.Fatalf("SendSelfAdvert: %v", err)
+	}
+}
+
+func TestClientSendSelfAdvertError(t *testing.T) {
+	// firmware returns RESP_CODE_ERR with ERR_CODE_TABLE_FULL when advert can't build
+	port := &scriptedPort{reads: [][][]byte{
+		{{RespError, 0x05}},
+	}}
+	c := NewClient(port, "diag")
+	if err := c.SendSelfAdvert(false, time.Second); err == nil {
+		t.Fatal("expected error from RESP_CODE_ERR")
+	}
+}
+
 func TestClientAddOrUpdateContact(t *testing.T) {
 	pkHex := hex.EncodeToString(bytes.Repeat([]byte{0xFE}, 32))
 	port := &scriptedPort{reads: [][][]byte{

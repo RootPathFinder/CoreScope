@@ -338,7 +338,9 @@ func pollOnce(vault *repeatervault.Store, status *companion.StatusStore, serialP
 	return nil
 }
 
-// processPendingUSBTests runs queued UI self-tests (Open + APP_START + GET_CONTACTS, no RF login).
+// processPendingUSBTests runs queued UI self-tests. TestModeUSB is read-only
+// (open → app_start → device_query → battery → get_contacts); TestModeAdvert
+// adds a single zero-hop self-advert to exercise RF TX in isolation.
 func processPendingUSBTests(configDir string, status *companion.StatusStore, serialPath string, baud int) {
 	pending, err := companion.ListPendingTestRequests(configDir)
 	if err != nil || len(pending) == 0 {
@@ -351,69 +353,140 @@ func processPendingUSBTests(configDir string, status *companion.StatusStore, ser
 			_ = os.Remove(path)
 			continue
 		}
-		log.Printf("companion usb-test %s: starting (open → app_start → get_contacts)", req.ID)
+		mode := companion.NormalizeTestMode(req.Mode)
+		log.Printf("companion usb-test %s: starting mode=%s", req.ID, mode)
 		res := runUSBSelfTest(req, status, serialPath, baud)
 		if err := companion.WriteTestResult(configDir, res); err != nil {
 			log.Printf("companion usb-test %s: write result: %v", req.ID, err)
 			continue
 		}
 		if res.OK {
-			log.Printf("companion usb-test %s: OK contacts=%d duration=%dms", req.ID, res.ContactCount, res.DurationMs)
+			log.Printf("companion usb-test %s: OK mode=%s contacts=%d advertSent=%v duration=%dms",
+				req.ID, res.Mode, res.ContactCount, res.AdvertSent, res.DurationMs)
 		} else {
-			log.Printf("companion usb-test %s: FAIL %s duration=%dms", req.ID, res.Error, res.DurationMs)
+			log.Printf("companion usb-test %s: FAIL mode=%s %s duration=%dms", req.ID, res.Mode, res.Error, res.DurationMs)
 		}
 	}
 }
 
-// runUSBSelfTest opens the companion, handshakes, and lists contacts — no RF TX / login.
+// runUSBSelfTest opens the companion and runs a sequence of read-only queries
+// (proving the protocol + real device responses), optionally followed by a
+// zero-hop self-advert (RF TX) in TestModeAdvert. Every step records the actual
+// device reply so the UI never assumes success.
 func runUSBSelfTest(req *companion.TestRequest, status *companion.StatusStore, serialPath string, baud int) companion.TestResult {
 	start := time.Now()
+	mode := companion.NormalizeTestMode(req.Mode)
 	res := companion.TestResult{
 		ID:          req.ID,
 		RequestedAt: req.RequestedAt,
+		Mode:        mode,
 		Port:        serialPath,
 		Baud:        baud,
-		Steps:       []string{},
 	}
-	link, err := openCompanion(serialPath, baud)
-	if err != nil {
+	finish := func() companion.TestResult {
 		res.CompletedAt = time.Now().UTC()
 		res.DurationMs = time.Since(start).Milliseconds()
-		res.OK = false
-		res.Error = link.info.LastError
-		if res.Error == "" {
-			res.Error = err.Error()
-		}
-		_ = status.SetCompanion(link.info)
 		return res
 	}
+
+	link, err := openCompanion(serialPath, baud)
+	if err != nil {
+		detail := link.info.LastError
+		if detail == "" {
+			detail = err.Error()
+		}
+		res.AddStep("open", false, detail)
+		res.OK = false
+		res.Error = detail
+		_ = status.SetCompanion(link.info)
+		return finish()
+	}
 	defer link.close()
-	res.Steps = append(res.Steps, "open", "app_start")
+	res.AddStep("open", true, fmt.Sprintf("%s @ %d baud", serialPath, baud))
 	_ = status.SetCompanion(link.info)
 
+	// app_start → self-info (device's own pubkey / name / radio params).
+	self, serr := link.client.AppStartInfo(5 * time.Second)
+	if serr != nil {
+		res.AddStep("app_start", false, serr.Error())
+		link.info.OK = false
+		link.info.LastError = "app_start: " + serr.Error()
+		_ = status.SetCompanion(link.info)
+		res.OK = false
+		res.Error = "app_start: " + serr.Error()
+		return finish()
+	}
+	res.Self = &self
+	res.AddStep("app_start", true, fmt.Sprintf("node=%q pubkey=%s tx=%ddBm", self.NodeName, short(self.PublicKey), self.TxPower))
+
+	// device_query → firmware version/build (best-effort; older firmware may skip).
+	if dev, derr := link.client.QueryDeviceInfo(5 * time.Second); derr != nil {
+		if companion.IsDisconnected(derr) {
+			res.AddStep("device_query", false, derr.Error())
+			res.OK = false
+			res.Error = "device_query: " + derr.Error()
+			return finish()
+		}
+		res.AddStep("device_query", false, derr.Error())
+	} else {
+		res.Device = &dev
+		res.AddStep("device_query", true, fmt.Sprintf("fw=%s build=%s ver_code=%d", dev.FirmwareVersion, dev.FirmwareBuild, dev.FirmwareVerCode))
+	}
+
+	// battery + storage (best-effort).
+	if batt, berr := link.client.GetBattStorage(5 * time.Second); berr != nil {
+		if companion.IsDisconnected(berr) {
+			res.AddStep("battery", false, berr.Error())
+			res.OK = false
+			res.Error = "battery: " + berr.Error()
+			return finish()
+		}
+		res.AddStep("battery", false, berr.Error())
+	} else {
+		res.Battery = &batt
+		res.AddStep("battery", true, fmt.Sprintf("%dmV storage=%d/%dkB", batt.BatteryMv, batt.StorageUsedKb, batt.StorageTotKb))
+	}
+
+	// get_contacts (required; proves streamed multi-frame protocol works).
 	contacts, reported, cerr := link.client.GetContacts(30 * time.Second)
-	res.Steps = append(res.Steps, "get_contacts")
 	link.info.ContactCount = len(contacts)
+	res.ContactCount = len(contacts)
 	if cerr != nil {
+		res.AddStep("get_contacts", false, cerr.Error())
 		link.info.LastError = "get_contacts: " + cerr.Error()
 		link.info.OK = false
 		_ = status.SetContacts(link.info, contacts)
-		res.CompletedAt = time.Now().UTC()
-		res.DurationMs = time.Since(start).Milliseconds()
 		res.OK = false
-		res.Error = link.info.LastError
-		res.ContactCount = len(contacts)
-		_ = reported
-		return res
+		res.Error = "get_contacts: " + cerr.Error()
+		return finish()
 	}
+	_ = reported
+	res.AddStep("get_contacts", true, fmt.Sprintf("%d contact(s)", len(contacts)))
 	link.info.LastError = ""
 	link.info.OK = true
 	_ = status.SetContacts(link.info, contacts)
-	res.CompletedAt = time.Now().UTC()
-	res.DurationMs = time.Since(start).Milliseconds()
+
+	// Optional RF TX: a single zero-hop self-advert to test transmit in isolation.
+	if mode == companion.TestModeAdvert {
+		if aerr := link.client.SendSelfAdvert(false, 10*time.Second); aerr != nil {
+			res.AddStep("self_advert", false, aerr.Error())
+			link.info.OK = false
+			link.info.LastError = "self_advert: " + aerr.Error()
+			_ = status.SetCompanion(link.info)
+			res.OK = false
+			if companion.IsDisconnected(aerr) {
+				res.Error = disconnectHint(aerr) + " — reproduced by a bare zero-hop self-advert (no login/password/contact), so the drop is RF-TX-triggered, not a command/protocol issue."
+			} else {
+				res.Error = "self_advert: " + aerr.Error()
+			}
+			return finish()
+		}
+		res.AdvertSent = true
+		res.AddStep("self_advert", true, "zero-hop advert accepted (RESP_CODE_OK)")
+	}
+
 	res.OK = true
-	res.ContactCount = len(contacts)
-	return res
+	return finish()
 }
 
 // ensureContact adds/updates a vaulted repeater as a zero-hop companion contact.

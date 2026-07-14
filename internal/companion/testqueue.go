@@ -20,25 +20,65 @@ import (
 
 const TestQueueDirName = "companion-test-requests"
 
-// TestRequest is written by the server when the UI clicks "Test USB".
+// Test modes selectable from the UI.
+const (
+	// TestModeUSB is read-only: open → app_start → device_query → battery →
+	// get_contacts. No RF transmit. Proves the USB link + protocol work and
+	// surfaces the device's own identity so nothing is assumed.
+	TestModeUSB = "usb"
+	// TestModeAdvert does everything TestModeUSB does, then emits a single
+	// zero-hop self-advert (CMD_SEND_SELF_ADVERT) to test whether RF TX itself
+	// drops the USB link — the exact failing path for managed logins.
+	TestModeAdvert = "advert"
+)
+
+// NormalizeTestMode returns a valid mode, defaulting unknown values to usb.
+func NormalizeTestMode(m string) string {
+	switch strings.ToLower(strings.TrimSpace(m)) {
+	case TestModeAdvert:
+		return TestModeAdvert
+	default:
+		return TestModeUSB
+	}
+}
+
+// TestRequest is written by the server when the UI clicks a Test USB button.
 type TestRequest struct {
 	ID          string    `json:"id"`
 	RequestedAt time.Time `json:"requestedAt"`
-	Mode        string    `json:"mode,omitempty"` // "usb" (default); reserved for future "full-poll"
+	Mode        string    `json:"mode,omitempty"` // TestModeUSB (default) or TestModeAdvert
 }
 
-// TestResult is written by the poller after the USB self-test completes.
+// DiagStep records one diagnostic step and the device's actual response, so the
+// UI can prove the companion replied (not that the poller assumed success).
+type DiagStep struct {
+	Name   string `json:"name"`
+	OK     bool   `json:"ok"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// TestResult is written by the poller after the self-test completes.
 type TestResult struct {
-	ID           string    `json:"id"`
-	RequestedAt  time.Time `json:"requestedAt"`
-	CompletedAt  time.Time `json:"completedAt"`
-	OK           bool      `json:"ok"`
-	Error        string    `json:"error,omitempty"`
-	Port         string    `json:"port,omitempty"`
-	Baud         int       `json:"baud,omitempty"`
-	ContactCount int       `json:"contactCount,omitempty"`
-	DurationMs   int64     `json:"durationMs,omitempty"`
-	Steps        []string  `json:"steps,omitempty"`
+	ID           string       `json:"id"`
+	RequestedAt  time.Time    `json:"requestedAt"`
+	CompletedAt  time.Time    `json:"completedAt"`
+	Mode         string       `json:"mode,omitempty"`
+	OK           bool         `json:"ok"`
+	Error        string       `json:"error,omitempty"`
+	Port         string       `json:"port,omitempty"`
+	Baud         int          `json:"baud,omitempty"`
+	ContactCount int          `json:"contactCount,omitempty"`
+	DurationMs   int64        `json:"durationMs,omitempty"`
+	Steps        []DiagStep   `json:"steps,omitempty"`
+	Device       *DeviceInfo  `json:"device,omitempty"`  // from CMD_DEVICE_QUERY
+	Self         *SelfInfo    `json:"self,omitempty"`    // from CMD_APP_START
+	Battery      *BattStorage `json:"battery,omitempty"` // from CMD_GET_BATT_AND_STORAGE
+	AdvertSent   bool         `json:"advertSent,omitempty"`
+}
+
+// AddStep appends a diagnostic step to the result.
+func (r *TestResult) AddStep(name string, ok bool, detail string) {
+	r.Steps = append(r.Steps, DiagStep{Name: name, OK: ok, Detail: detail})
 }
 
 // NewTestID returns a 16-hex-char random id for marker filenames.

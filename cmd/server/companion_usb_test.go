@@ -54,9 +54,12 @@ func TestCompanionUSBTestEnqueueAndStatus(t *testing.T) {
 	// Simulate poller writing a result
 	res := companion.TestResult{
 		ID: enq.ID, RequestedAt: time.Now().UTC(), CompletedAt: time.Now().UTC(),
-		OK: true, ContactCount: 3, DurationMs: 100, Steps: []string{"open", "app_start", "get_contacts"},
+		OK: true, Mode: companion.TestModeUSB, ContactCount: 3, DurationMs: 100,
 		Port: "/dev/ttyACM1", Baud: 115200,
 	}
+	res.AddStep("open", true, "")
+	res.AddStep("app_start", true, "node=\"X\"")
+	res.AddStep("get_contacts", true, "3 contact(s)")
 	if err := companion.WriteTestResult(dir, res); err != nil {
 		t.Fatal(err)
 	}
@@ -104,5 +107,29 @@ func TestCompanionUSBTestEnqueueAndStatus(t *testing.T) {
 	entries, _ := os.ReadDir(filepath.Join(dir, "data", companion.TestQueueDirName))
 	if len(entries) == 0 {
 		t.Fatal("expected result file in queue dir")
+	}
+}
+
+func TestCompanionUSBTestAdvertMode(t *testing.T) {
+	const apiKey = "companion-usb-test-key-32chars!!"
+	_, router, dir := setupManagedRepeatersServer(t, apiKey)
+
+	req := httptest.NewRequest("POST", "/api/companion/test?mode=advert", nil)
+	req.Header.Set("X-API-Key", apiKey)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("enqueue code=%d body=%s", w.Code, w.Body.String())
+	}
+	var enq CompanionUSBTestEnqueueResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &enq); err != nil {
+		t.Fatal(err)
+	}
+	if enq.Mode != companion.TestModeAdvert {
+		t.Fatalf("mode=%q want advert", enq.Mode)
+	}
+	got, err := companion.ReadTestRequest(filepath.Join(companion.TestQueueDir(dir), "request-"+enq.ID+".json"))
+	if err != nil || got.Mode != companion.TestModeAdvert {
+		t.Fatalf("request mode=%+v err=%v", got, err)
 	}
 }

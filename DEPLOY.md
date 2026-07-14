@@ -49,7 +49,9 @@ Poller logs are verbose on failure: contact count, whether the pubkey is among c
 - Prefer a **powered USB hub / solid 5V supply** — LoRa TX (especially flood) can brown out weak USB ports and show as `EOF` / “companion USB disconnected during RF TX”. The poller forces **zero-hop** paths for seeded contacts (not flood), reconnects on disconnect, and continues to the next repeater. If disconnects persist on zero-hop too: confirm only one process owns the tty, try the same login with official `meshcore-cli`, and check companion firmware stability on RF TX — not only the PSU.
 - Admin passwords ≤ **15 characters** (companion protocol limit)
 - UI `#/repeaters` shows companion contacts and marks each vaulted repeater as **On companion** / **Not on companion**
-- **Test USB** button on the companion card runs an on-demand self-test (open serial → `APP_START` → `GET_CONTACTS`, no RF login). Requires `apiKey`. The poller picks up the request within ~1s and updates status.
+- **Test USB** buttons on the companion card run on-demand diagnostics (requires `apiKey`; the poller picks up the request within ~1s):
+  - **Test USB** (read-only, no RF TX): open serial → `APP_START` (self-info) → `DEVICE_QUERY` (firmware version/build) → `GET_BATT_AND_STORAGE` (battery mV) → `GET_CONTACTS`. The result panel shows the device's **own public key, node name, TX power, firmware version and battery** taken straight off the wire, plus a per-step ✓/✗ trace — proof the commands/protocol are correct and the device is actually responding over USB (nothing assumed).
+  - **Test USB + TX**: everything above, then a single **zero-hop `CMD_SEND_SELF_ADVERT`** (no login, no password, no contact). This isolates RF transmit: if the read-only test passes but this one drops the link (`EOF`), the failure is TX-triggered (USB power/host, or firmware TX stability) — not a command/protocol bug. If both pass but managed logins still `EOF`, the extra variable is the login TX itself (longer/again check PSU + firmware).
 **Portainer sidecar example:**
 
 ```yaml
