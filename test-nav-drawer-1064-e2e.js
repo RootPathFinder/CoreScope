@@ -29,7 +29,7 @@
 const { chromium } = require('playwright');
 
 const BASE = process.env.BASE_URL || 'http://localhost:13581';
-const EXPECTED_LONG_TAIL = ['nodes', 'tools', 'observers', 'analytics', 'perf', 'audio-lab'];
+const EXPECTED_LONG_TAIL = ['nodes', 'tools', 'observers', 'repeaters', 'analytics', 'perf', 'audio-lab'];
 
 let passed = 0, failed = 0;
 async function step(name, fn) {

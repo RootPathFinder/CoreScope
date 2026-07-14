@@ -5555,3 +5555,37 @@ body.embed #app.app-fixed {
 .role-swatch--room      { color: var(--role-room); }
 .role-swatch--sensor    { color: var(--role-sensor); }
 .role-swatch--observer  { color: var(--role-observer); }
+
+/* Managed Repeaters (#/repeaters) — credential vault UI (M1) */
+.managed-repeaters-page .mr-card {
+  margin: 1rem 0;
+  padding: 1rem 0;
+  border-top: 1px solid var(--border);
+}
+.managed-repeaters-page .mr-label {
+  display: block;
+  margin: 0.6rem 0;
+  font-size: 0.9rem;
+}
+.managed-repeaters-page .mr-label input {
+  display: block;
+  width: 100%;
+  max-width: 36rem;
+  margin-top: 0.3rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--input-bg);
+  color: var(--text);
+}
+.managed-repeaters-page .mr-hint { font-size: 0.85rem; margin: 0.25rem 0 0; }
+.managed-repeaters-page .mr-msg { min-height: 1.25rem; margin: 0.5rem 0; }
+.managed-repeaters-page .mr-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+.managed-repeaters-page .mr-toolbar h3 { margin: 0; }
+

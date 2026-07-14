@@ -48,7 +48,7 @@ const HIGH_PRIORITY_HREFS = ['#/home', '#/packets', '#/map', '#/live', '#/nodes'
 // "active pill is non-high" branch where the bug surfaces.
 // #1396: extended to include /#/channels — operator screenshot at ~1024px
 // showed the entire inline strip EMPTY and More containing only "Tools".
-const NON_HIGH_ROUTES = ['#/perf', '#/audio-lab', '#/analytics', '#/observers', '#/channels'];
+const NON_HIGH_ROUTES = ['#/perf', '#/audio-lab', '#/analytics', '#/observers', '#/repeaters', '#/channels'];
 
 // Operator screenshot was ~1080px. Cover the narrow-desktop CSS branch
 // (≤1100) AND the measurement-loop branch (>1100) — bug reproduces in
@@ -197,7 +197,7 @@ async function main() {
         // EXACTLY the non-active non-high routes so the channels link (when
         // active) stays inline and is not orphaned in the dropdown.
         if (w <= 1100) {
-          const ALL_NON_HIGH = ['#/channels', '#/tools', '#/observers', '#/analytics', '#/perf', '#/audio-lab'];
+          const ALL_NON_HIGH = ['#/channels', '#/tools', '#/observers', '#/repeaters', '#/analytics', '#/perf', '#/audio-lab'];
           const expectedMore = ALL_NON_HIGH.filter(h => h !== expectedActive).sort();
           assert.deepStrictEqual(
             [...data.moreItems].sort(),

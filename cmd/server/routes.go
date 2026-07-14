@@ -20,6 +20,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/meshcore-analyzer/packetpath"
 	"github.com/meshcore-analyzer/prunequeue"
+	"github.com/meshcore-analyzer/repeatervault"
 )
 
 // memBreakdownNote is the static accounting caveat attached to the opt-in
@@ -38,6 +39,10 @@ type Server struct {
 	version   string
 	commit    string
 	buildTime string
+
+	// Encrypted managed-repeater credential vault (file under configDir/data).
+	// Nil when apiKey/CORESCOPE_VAULT_KEY is unset or vault failed to open.
+	repeaterVault *repeatervault.Store
 
 	// Cached runtime.MemStats to avoid stop-the-world pauses on every health check
 	memStatsMu       sync.Mutex
@@ -248,6 +253,12 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.Handle("/api/debug/affinity", s.requireAPIKey(http.HandlerFunc(s.handleDebugAffinity))).Methods("GET")
 	r.Handle("/api/dropped-packets", s.requireAPIKey(http.HandlerFunc(s.handleDroppedPackets))).Methods("GET")
 	r.Handle("/api/backup", s.requireAPIKey(http.HandlerFunc(s.handleBackup))).Methods("GET")
+
+	// Managed remote repeaters + encrypted admin-password vault (M1 active telemetry).
+	r.Handle("/api/managed-repeaters", s.requireAPIKey(http.HandlerFunc(s.handleListManagedRepeaters))).Methods("GET")
+	r.Handle("/api/managed-repeaters", s.requireAPIKey(http.HandlerFunc(s.handleCreateManagedRepeater))).Methods("POST")
+	r.Handle("/api/managed-repeaters/{id}", s.requireAPIKey(http.HandlerFunc(s.handleUpdateManagedRepeater))).Methods("PUT")
+	r.Handle("/api/managed-repeaters/{id}", s.requireAPIKey(http.HandlerFunc(s.handleDeleteManagedRepeater))).Methods("DELETE")
 
 	// Packet endpoints
 	r.HandleFunc("/api/packets/observations", s.handleBatchObservations).Methods("POST")

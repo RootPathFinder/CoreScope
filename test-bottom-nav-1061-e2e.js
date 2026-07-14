@@ -32,7 +32,7 @@ const EXPECTED_TABS = ['home', 'packets', 'live', 'map', 'channels', 'more'];
 // #1174: long-tail routes surfaced in the More sheet (the routes NOT in
 // the 5 primary bottom-nav slots). Mirror data-route values from the
 // existing top-nav.
-const EXPECTED_MORE_ROUTES = ['nodes', 'tools', 'observers', 'analytics', 'perf', 'audio-lab'];
+const EXPECTED_MORE_ROUTES = ['nodes', 'tools', 'observers', 'repeaters', 'analytics', 'perf', 'audio-lab'];
 
 function isVisible(rect) {
   return rect && rect.width > 0 && rect.height > 0;
