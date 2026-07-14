@@ -68,7 +68,14 @@ func main() {
 		processPendingUSBTests(*configDir, status, *serialPath, *baud)
 	}
 
+	drainConfig := func() {
+		serialMu.Lock()
+		defer serialMu.Unlock()
+		processPendingConfigRequests(*configDir, status, *serialPath, *baud)
+	}
+
 	runCycle()
+	drainConfig()
 	drainTests()
 	if *once {
 		return
@@ -80,6 +87,7 @@ func main() {
 	for {
 		select {
 		case <-tick.C:
+			drainConfig()
 			drainTests()
 			if time.Since(lastPoll) >= *interval {
 				runCycle()
@@ -483,6 +491,109 @@ func runUSBSelfTest(req *companion.TestRequest, status *companion.StatusStore, s
 		}
 		res.AdvertSent = true
 		res.AddStep("self_advert", true, "zero-hop advert accepted (RESP_CODE_OK)")
+	}
+
+	res.OK = true
+	return finish()
+}
+
+// processPendingConfigRequests applies queued radio-config changes from the UI
+// (CMD_SET_RADIO_PARAMS / CMD_SET_RADIO_TX_POWER), then re-reads self-info to
+// prove the device accepted the new settings.
+func processPendingConfigRequests(configDir string, status *companion.StatusStore, serialPath string, baud int) {
+	pending, err := companion.ListPendingConfigRequests(configDir)
+	if err != nil || len(pending) == 0 {
+		return
+	}
+	for _, path := range pending {
+		req, err := companion.ReadConfigRequest(path)
+		if err != nil || req == nil || req.ID == "" {
+			log.Printf("companion config: skip bad request %s: %v", path, err)
+			_ = os.Remove(path)
+			continue
+		}
+		log.Printf("companion config %s: applying region=%q radio=%v txPower=%v", req.ID, req.Region, req.Radio != nil, req.TxPowerDbm != nil)
+		res := runConfigApply(req, status, serialPath, baud)
+		if err := companion.WriteConfigResult(configDir, res); err != nil {
+			log.Printf("companion config %s: write result: %v", req.ID, err)
+			continue
+		}
+		if res.OK {
+			log.Printf("companion config %s: OK duration=%dms", req.ID, res.DurationMs)
+		} else {
+			log.Printf("companion config %s: FAIL %s duration=%dms", req.ID, res.Error, res.DurationMs)
+		}
+	}
+}
+
+// runConfigApply opens the companion, applies the requested radio params / tx
+// power, and re-reads self-info so the UI can confirm the change stuck.
+func runConfigApply(req *companion.ConfigRequest, status *companion.StatusStore, serialPath string, baud int) companion.ConfigResult {
+	start := time.Now()
+	res := companion.ConfigResult{
+		ID:          req.ID,
+		RequestedAt: req.RequestedAt,
+		Region:      req.Region,
+		Applied:     req.Radio,
+		TxPowerDbm:  req.TxPowerDbm,
+	}
+	finish := func() companion.ConfigResult {
+		res.CompletedAt = time.Now().UTC()
+		res.DurationMs = time.Since(start).Milliseconds()
+		return res
+	}
+
+	if err := req.Validate(); err != nil {
+		res.AddStep("validate", false, err.Error())
+		res.OK = false
+		res.Error = err.Error()
+		return finish()
+	}
+
+	link, err := openCompanion(serialPath, baud)
+	if err != nil {
+		detail := link.info.LastError
+		if detail == "" {
+			detail = err.Error()
+		}
+		res.AddStep("open", false, detail)
+		res.OK = false
+		res.Error = detail
+		_ = status.SetCompanion(link.info)
+		return finish()
+	}
+	defer link.close()
+	res.AddStep("open", true, fmt.Sprintf("%s @ %d baud", serialPath, baud))
+	_ = status.SetCompanion(link.info)
+
+	if req.Radio != nil {
+		if err := link.client.SetRadioParams(*req.Radio, 8*time.Second); err != nil {
+			res.AddStep("set_radio_params", false, err.Error())
+			res.OK = false
+			res.Error = "set_radio_params: " + err.Error()
+			return finish()
+		}
+		res.AddStep("set_radio_params", true, fmt.Sprintf("%.3f MHz bw=%.1f kHz sf=%d cr=%d",
+			float64(req.Radio.FreqKHz)/1000.0, float64(req.Radio.BandwidthHz)/1000.0, req.Radio.SF, req.Radio.CR))
+	}
+
+	if req.TxPowerDbm != nil {
+		if err := link.client.SetTxPower(*req.TxPowerDbm, 5*time.Second); err != nil {
+			res.AddStep("set_tx_power", false, err.Error())
+			res.OK = false
+			res.Error = "set_tx_power: " + err.Error()
+			return finish()
+		}
+		res.AddStep("set_tx_power", true, fmt.Sprintf("%d dBm", *req.TxPowerDbm))
+	}
+
+	// Re-read self-info to prove the device applied the change.
+	if self, serr := link.client.AppStartInfo(5 * time.Second); serr != nil {
+		res.AddStep("verify", false, serr.Error())
+	} else {
+		res.SelfAfter = &self
+		res.AddStep("verify", true, fmt.Sprintf("now %.3f MHz bw=%.1f kHz sf=%d cr=%d tx=%d dBm",
+			float64(self.FreqKHz)/1000.0, float64(self.BandwidthHz)/1000.0, self.SF, self.CR, self.TxPower))
 	}
 
 	res.OK = true
