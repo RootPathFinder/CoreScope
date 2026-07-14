@@ -259,6 +259,8 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.Handle("/api/managed-repeaters", s.requireAPIKey(http.HandlerFunc(s.handleCreateManagedRepeater))).Methods("POST")
 	r.Handle("/api/managed-repeaters/{id}", s.requireAPIKey(http.HandlerFunc(s.handleUpdateManagedRepeater))).Methods("PUT")
 	r.Handle("/api/managed-repeaters/{id}", s.requireAPIKey(http.HandlerFunc(s.handleDeleteManagedRepeater))).Methods("DELETE")
+	r.Handle("/api/companion/test", s.requireAPIKey(http.HandlerFunc(s.handleCompanionUSBTest))).Methods("POST")
+	r.Handle("/api/companion/test/status", s.requireAPIKey(http.HandlerFunc(s.handleCompanionUSBTestStatus))).Methods("GET")
 
 	// Packet endpoints
 	r.HandleFunc("/api/packets/observations", s.handleBatchObservations).Methods("POST")

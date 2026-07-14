@@ -6,6 +6,7 @@
   var _root = null;
   var _msgTimer = null;
   var _pollTimer = null;
+  var _testingUSB = false;
 
   function esc(s) {
     return (typeof escapeHtml === 'function') ? escapeHtml(String(s == null ? '' : s)) : String(s == null ? '' : s)
@@ -57,7 +58,9 @@
     var el = _root.querySelector('#mr-companion');
     if (!el) return;
     if (!companion) {
-      el.innerHTML = '<p class="text-muted">No companion-poller status yet. Deploy the poller service with <code>COMPANION_SERIAL=/dev/ttyACM1</code>.</p>';
+      el.innerHTML =
+        '<p class="text-muted">No companion-poller status yet. Deploy the poller service with <code>COMPANION_SERIAL=/dev/ttyACM1</code>.</p>'
+        + '<button type="button" class="btn btn-sm" data-action="test-companion" id="mr-test-usb">Test USB</button>';
       return;
     }
     var ok = !!companion.ok;
@@ -70,6 +73,7 @@
       + (n != null ? '<span class="text-muted">' + esc(String(n)) + ' contact' + (n === 1 ? '' : 's') + '</span>' : '')
       + (statusAt ? '<span class="text-muted">status ' + esc(statusAt) + '</span>' : '')
       + (companion.lastError ? '<span class="mr-err">' + esc(companion.lastError) + '</span>' : '')
+      + '<button type="button" class="btn btn-sm" data-action="test-companion" id="mr-test-usb" title="Open serial, APP_START, list contacts (no RF login)">Test USB</button>'
       + '</div>';
   }
 
@@ -262,7 +266,72 @@
     }
   }
 
+  async function onTestUSB() {
+    var keyInput = _root && _root.querySelector('#mr-apikey');
+    if (keyInput) setApiKey(keyInput.value.trim());
+    if (!apiKey()) {
+      showMsg('apiKey required to test the companion.', false);
+      return;
+    }
+    var btn = _root.querySelector('#mr-test-usb');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Testing…';
+    }
+    showMsg('USB self-test queued (open → APP_START → contacts)…', true);
+    try {
+      var res = await fetch('/api/companion/test', { method: 'POST', headers: headers(false) });
+      var body = await res.json().catch(function () { return {}; });
+      if (!res.ok) {
+        showMsg((body && body.error) || ('Test failed (' + res.status + ')'), false);
+        return;
+      }
+      var id = body && body.id;
+      if (!id) {
+        showMsg('Test enqueue returned no id.', false);
+        return;
+      }
+      var deadline = Date.now() + 45000;
+      var last = null;
+      while (Date.now() < deadline) {
+        await new Promise(function (r) { setTimeout(r, 800); });
+        var stRes = await fetch('/api/companion/test/status?id=' + encodeURIComponent(id), {
+          headers: headers(false)
+        });
+        last = await stRes.json().catch(function () { return {}; });
+        if (!stRes.ok) {
+          showMsg((last && last.error) || ('Status failed (' + stRes.status + ')'), false);
+          return;
+        }
+        if (last.status === 'done' && last.result) {
+          var r = last.result;
+          if (r.ok) {
+            showMsg('USB OK — ' + (r.contactCount || 0) + ' contact(s) in ' + (r.durationMs || 0) + 'ms.', true);
+          } else {
+            showMsg('USB FAIL — ' + (r.error || 'unknown error'), false);
+          }
+          await refresh(true);
+          return;
+        }
+      }
+      showMsg('USB test still pending — is companion-poller running? Status will update when it wakes.', false);
+      await refresh(true);
+    } catch (err) {
+      showMsg('USB test failed: ' + (err && err.message || err), false);
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Test USB';
+      }
+    }
+  }
+
   function onClick(ev) {
+    var testBtn = ev.target && ev.target.closest ? ev.target.closest('[data-action="test-companion"]') : null;
+    if (testBtn) {
+      onTestUSB();
+      return;
+    }
     var btn = ev.target && ev.target.closest ? ev.target.closest('[data-action="delete"]') : null;
     if (!btn) return;
     onDelete(btn.getAttribute('data-id'));

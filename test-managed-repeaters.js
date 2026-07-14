@@ -37,6 +37,8 @@ assert.ok(src.includes('mr-cards'), 'UI renders monitoring cards');
 assert.ok(src.includes('mr-contacts'), 'UI renders companion contacts panel');
 assert.ok(src.includes('companionKnown'), 'UI surfaces companionKnown flag');
 assert.ok(src.includes('On companion'), 'UI labels vaulted nodes known to companion');
+assert.ok(src.includes('data-action="test-companion"'), 'UI has Test USB companion control');
+assert.ok(src.includes('/api/companion/test'), 'UI calls companion USB self-test API');
 assert.ok(src.includes('CMD_SEND_LOGIN') === false, 'no protocol constants leaked into UI');
 assert.ok(src.includes('companion-poller'), 'UI mentions companion poller');
 
