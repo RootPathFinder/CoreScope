@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 )
@@ -57,7 +58,39 @@ var (
 	ErrBadPubkey    = errors.New("public key must be 64 hex chars (32 bytes)")
 	ErrPasswordLong = errors.New("admin password exceeds 15-byte companion limit")
 	ErrProtocol     = errors.New("unexpected companion response")
+	// ErrDisconnected means the USB CDC link dropped mid-command (often RF TX brownout).
+	ErrDisconnected = errors.New("companion serial disconnected")
 )
+
+// IsDisconnected reports whether err is (or wraps) a serial disconnect / EOF.
+func IsDisconnected(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrDisconnected) || errors.Is(err, io.EOF) {
+		return true
+	}
+	// Some platforms surface "file already closed" / "input/output error" on yank.
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "i/o error") ||
+		strings.Contains(msg, "input/output error") ||
+		strings.Contains(msg, "no such device") ||
+		strings.Contains(msg, "device not configured")
+}
+
+// WrapSerialErr maps raw port errors to ErrDisconnected when appropriate.
+func WrapSerialErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, ErrTimeout) || errors.Is(err, ErrDisconnected) {
+		return err
+	}
+	if IsDisconnected(err) {
+		return fmt.Errorf("%w: %v", ErrDisconnected, err)
+	}
+	return err
+}
 
 // DecodePubKey parses a 64-char hex MeshCore public key.
 func DecodePubKey(s string) ([]byte, error) {

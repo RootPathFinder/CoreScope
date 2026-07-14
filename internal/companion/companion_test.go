@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -339,6 +341,28 @@ func TestClientGetContacts(t *testing.T) {
 	}
 	if total != 1 || len(list) != 1 || list[0].Name != "RoomA" || list[0].TypeLabel != "room" {
 		t.Fatalf("list=%+v total=%d", list, total)
+	}
+}
+
+func TestIsDisconnectedAndWrap(t *testing.T) {
+	if !IsDisconnected(io.EOF) {
+		t.Fatal("EOF should be disconnected")
+	}
+	if !IsDisconnected(fmt.Errorf("%w: eof", ErrDisconnected)) {
+		t.Fatal("wrapped ErrDisconnected")
+	}
+	if IsDisconnected(ErrTimeout) {
+		t.Fatal("timeout is not disconnect")
+	}
+	if IsDisconnected(nil) {
+		t.Fatal("nil")
+	}
+	wrapped := WrapSerialErr(io.EOF)
+	if !errors.Is(wrapped, ErrDisconnected) {
+		t.Fatalf("wrap=%v", wrapped)
+	}
+	if WrapSerialErr(ErrTimeout) != ErrTimeout {
+		t.Fatal("timeout passthrough")
 	}
 }
 

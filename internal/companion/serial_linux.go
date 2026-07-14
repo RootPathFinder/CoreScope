@@ -27,6 +27,8 @@ func OpenSerial(path string, baud int) (Port, error) {
 		_ = f.Close()
 		return nil, err
 	}
+	// Match meshcore-cli: deassert RTS so some USB-CDC boards don't stay in flow-control hold.
+	_ = clearRTS(fd)
 	return &serialPort{f: f}, nil
 }
 
@@ -78,4 +80,13 @@ func baudToConst(baud int) (uint32, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func clearRTS(fd int) error {
+	status, err := unix.IoctlGetInt(fd, unix.TIOCMGET)
+	if err != nil {
+		return err
+	}
+	status &^= unix.TIOCM_RTS
+	return unix.IoctlSetPointerInt(fd, unix.TIOCMSET, status)
 }

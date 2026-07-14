@@ -74,41 +74,89 @@ func main() {
 	}
 }
 
-func pollOnce(vault *repeatervault.Store, status *companion.StatusStore, serialPath string, baud int, timeout time.Duration) error {
+type liveLink struct {
+	info   companion.CompanionInfo
+	port   companion.Port
+	client *companion.Client
+}
+
+func openCompanion(serialPath string, baud int) (*liveLink, error) {
 	info := companion.CompanionInfo{Port: serialPath, Baud: baud, LastOpen: time.Now().UTC()}
 	port, err := companion.OpenSerial(serialPath, baud)
 	if err != nil {
 		info.OK = false
 		info.LastError = err.Error()
-		_ = status.SetCompanion(info)
-		return err
+		return &liveLink{info: info}, err
 	}
-	defer port.Close()
 	info.OK = true
-	_ = status.SetCompanion(info)
-
 	client := companion.NewClient(port, "corescope-poller")
 	if err := client.Handshake(5 * time.Second); err != nil {
+		_ = port.Close()
 		info.OK = false
 		info.LastError = "handshake: " + err.Error()
-		_ = status.SetCompanion(info)
-		return fmt.Errorf("handshake: %w", err)
+		return &liveLink{info: info}, fmt.Errorf("handshake: %w", err)
 	}
+	return &liveLink{info: info, port: port, client: client}, nil
+}
+
+func (l *liveLink) close() {
+	if l != nil && l.port != nil {
+		_ = l.port.Close()
+		l.port = nil
+		l.client = nil
+	}
+}
+
+// reconnectAfterDisconnect waits for USB re-enumeration then opens a fresh link.
+func reconnectAfterDisconnect(serialPath string, baud int, reason error) (*liveLink, error) {
+	log.Printf("companion serial disconnected (%v) — waiting for USB re-enumerate then reconnecting", reason)
+	time.Sleep(2 * time.Second)
+	link, err := openCompanion(serialPath, baud)
+	if err != nil {
+		// One more try after a longer settle (some boards take 3–5s after brownout).
+		time.Sleep(3 * time.Second)
+		link, err = openCompanion(serialPath, baud)
+	}
+	return link, err
+}
+
+func pollOnce(vault *repeatervault.Store, status *companion.StatusStore, serialPath string, baud int, timeout time.Duration) error {
+	link, err := openCompanion(serialPath, baud)
+	if err != nil {
+		_ = status.SetCompanion(link.info)
+		return err
+	}
+	// Close whatever link is current at return (may be replaced after reconnect).
+	defer func() { link.close() }()
+	_ = status.SetCompanion(link.info)
 
 	contactsTimeout := timeout
 	if contactsTimeout < 30*time.Second {
 		contactsTimeout = 30 * time.Second
 	}
-	contacts, reportedTotal, cerr := client.GetContacts(contactsTimeout)
+	contacts, reportedTotal, cerr := link.client.GetContacts(contactsTimeout)
 	if cerr != nil {
-		log.Printf("get_contacts: FAIL %v (partial=%d reported=%d)", cerr, len(contacts), reportedTotal)
-		info.LastError = "get_contacts: " + cerr.Error()
-		// Keep whatever we got so the UI still shows something useful.
+		if companion.IsDisconnected(cerr) {
+			link.close()
+			link, err = reconnectAfterDisconnect(serialPath, baud, cerr)
+			if err != nil {
+				_ = status.SetCompanion(link.info)
+				return err
+			}
+			_ = status.SetCompanion(link.info)
+			contacts, reportedTotal, cerr = link.client.GetContacts(contactsTimeout)
+		}
+		if cerr != nil {
+			log.Printf("get_contacts: FAIL %v (partial=%d reported=%d)", cerr, len(contacts), reportedTotal)
+			link.info.LastError = "get_contacts: " + cerr.Error()
+		} else {
+			link.info.LastError = ""
+		}
 	} else {
-		info.LastError = ""
+		link.info.LastError = ""
 	}
-	info.ContactCount = len(contacts)
-	_ = status.SetContacts(info, contacts)
+	link.info.ContactCount = len(contacts)
+	_ = status.SetContacts(link.info, contacts)
 	logContacts(contacts, reportedTotal)
 
 	byKey := make(map[string]companion.Contact, len(contacts))
@@ -153,9 +201,32 @@ func pollOnce(vault *repeatervault.Store, status *companion.StatusStore, serialP
 			if seedName == "" {
 				seedName = short(r.PublicKey)
 			}
-			if err := client.AddOrUpdateContact(r.PublicKey, companion.AdvTypeRepeater, seedName, 5*time.Second); err != nil {
-				log.Printf("poll %s (%s): seed contact FAIL %v", short(r.PublicKey), r.Name, err)
+			if err := link.client.AddOrUpdateContact(r.PublicKey, companion.AdvTypeRepeater, seedName, 5*time.Second); err != nil {
+				if companion.IsDisconnected(err) {
+					link.close()
+					link, err = reconnectAfterDisconnect(serialPath, baud, err)
+					if err != nil {
+						snap.OK = false
+						snap.Error = disconnectHint(err)
+						snap.DurationMs = time.Since(start).Milliseconds()
+						_ = status.Upsert(link.info, snap)
+						log.Printf("poll %s (%s): FAIL %s — aborting cycle", short(r.PublicKey), r.Name, snap.Error)
+						return fmt.Errorf("companion reconnect failed: %w", err)
+					}
+					_ = status.SetCompanion(link.info)
+					// Retry seed once after reconnect.
+					if err := link.client.AddOrUpdateContact(r.PublicKey, companion.AdvTypeRepeater, seedName, 5*time.Second); err != nil {
+						log.Printf("poll %s (%s): seed contact FAIL %v", short(r.PublicKey), r.Name, err)
+					} else {
+						known = true
+					}
+				} else {
+					log.Printf("poll %s (%s): seed contact FAIL %v", short(r.PublicKey), r.Name, err)
+				}
 			} else {
+				known = true
+			}
+			if known {
 				seeded := companion.Contact{
 					PublicKey:  r.PublicKey,
 					Name:       seedName,
@@ -166,7 +237,6 @@ func pollOnce(vault *repeatervault.Store, status *companion.StatusStore, serialP
 				byKey[pkLower] = seeded
 				contacts = append(contacts, seeded)
 				contactsDirty = true
-				known = true
 				log.Printf("poll %s (%s): seeded on companion (flood path) name=%q", short(r.PublicKey), r.Name, seedName)
 			}
 		}
@@ -175,20 +245,45 @@ func pollOnce(vault *repeatervault.Store, status *companion.StatusStore, serialP
 		if err != nil {
 			snap.OK = false
 			snap.Error = "decrypt: " + err.Error()
-			_ = status.Upsert(info, snap)
+			_ = status.Upsert(link.info, snap)
 			continue
 		}
-		login, st, err := client.LoginAndStatus(r.PublicKey, pass, timeout)
+
+		login, st, err := link.client.LoginAndStatus(r.PublicKey, pass, timeout)
+		if companion.IsDisconnected(err) {
+			link.close()
+			var re *liveLink
+			re, err = reconnectAfterDisconnect(serialPath, baud, err)
+			if err != nil {
+				snap.OK = false
+				snap.Error = disconnectHint(err)
+				snap.DurationMs = time.Since(start).Milliseconds()
+				_ = status.Upsert(link.info, snap)
+				log.Printf("poll %s (%s): FAIL %s — aborting cycle", short(r.PublicKey), r.Name, snap.Error)
+				return fmt.Errorf("companion reconnect failed: %w", err)
+			}
+			link = re
+			_ = status.SetCompanion(link.info)
+			log.Printf("poll %s (%s): retrying login after reconnect", short(r.PublicKey), r.Name)
+			login, st, err = link.client.LoginAndStatus(r.PublicKey, pass, timeout)
+		}
+
 		snap.DurationMs = time.Since(start).Milliseconds()
 		if err != nil {
 			snap.OK = false
-			if errors.Is(err, companion.ErrNotFound) {
+			switch {
+			case companion.IsDisconnected(err):
+				snap.Error = disconnectHint(err)
+				_ = status.Upsert(link.info, snap)
+				log.Printf("poll %s (%s): FAIL %s — aborting cycle", short(r.PublicKey), r.Name, snap.Error)
+				return fmt.Errorf("companion disconnected during login: %w", err)
+			case errors.Is(err, companion.ErrNotFound):
 				snap.Error = companion.NotFoundHint(r.PublicKey, contacts)
-			} else {
+			default:
 				snap.Error = err.Error()
 			}
 			log.Printf("poll %s (%s): FAIL %s", short(r.PublicKey), r.Name, snap.Error)
-			_ = login // keep partial for future enrichment
+			_ = login
 		} else {
 			snap.OK = true
 			snap.IsAdmin = login.IsAdmin
@@ -197,13 +292,21 @@ func pollOnce(vault *repeatervault.Store, status *companion.StatusStore, serialP
 			log.Printf("poll %s (%s): OK battery=%dmV uptime=%ds admin=%v",
 				short(r.PublicKey), r.Name, stats.BatteryMv, stats.UptimeSecs, login.IsAdmin)
 		}
-		_ = status.Upsert(info, snap)
+		_ = status.Upsert(link.info, snap)
 	}
 	if contactsDirty {
-		info.ContactCount = len(contacts)
-		_ = status.SetContacts(info, contacts)
+		link.info.ContactCount = len(contacts)
+		_ = status.SetContacts(link.info, contacts)
 	}
 	return nil
+}
+
+func disconnectHint(err error) string {
+	base := "companion USB disconnected during RF TX"
+	if err != nil {
+		base = base + " (" + err.Error() + ")"
+	}
+	return base + " — often a power brownout on flood TX; use a powered hub / better supply, or wait for the companion to hear an advert (direct path uses less TX). Poller will reconnect next cycle."
 }
 
 func logContacts(contacts []companion.Contact, reported uint32) {
