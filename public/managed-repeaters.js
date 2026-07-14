@@ -57,10 +57,16 @@
   function renderCompanion(companion, statusAt, contactCount) {
     var el = _root.querySelector('#mr-companion');
     if (!el) return;
+    var testBtn =
+      '<button type="button" class="btn btn-sm" data-action="test-companion" id="mr-test-usb"'
+      + (_testingUSB ? ' disabled' : '')
+      + ' title="Open serial, APP_START, list contacts (no RF login)">'
+      + (_testingUSB ? 'Testing…' : 'Test USB')
+      + '</button>';
     if (!companion) {
       el.innerHTML =
         '<p class="text-muted">No companion-poller status yet. Deploy the poller service with <code>COMPANION_SERIAL=/dev/ttyACM1</code>.</p>'
-        + '<button type="button" class="btn btn-sm" data-action="test-companion" id="mr-test-usb">Test USB</button>';
+        + testBtn;
       return;
     }
     var ok = !!companion.ok;
@@ -73,7 +79,7 @@
       + (n != null ? '<span class="text-muted">' + esc(String(n)) + ' contact' + (n === 1 ? '' : 's') + '</span>' : '')
       + (statusAt ? '<span class="text-muted">status ' + esc(statusAt) + '</span>' : '')
       + (companion.lastError ? '<span class="mr-err">' + esc(companion.lastError) + '</span>' : '')
-      + '<button type="button" class="btn btn-sm" data-action="test-companion" id="mr-test-usb" title="Open serial, APP_START, list contacts (no RF login)">Test USB</button>'
+      + testBtn
       + '</div>';
   }
 
@@ -267,12 +273,14 @@
   }
 
   async function onTestUSB() {
+    if (_testingUSB) return;
     var keyInput = _root && _root.querySelector('#mr-apikey');
     if (keyInput) setApiKey(keyInput.value.trim());
     if (!apiKey()) {
       showMsg('apiKey required to test the companion.', false);
       return;
     }
+    _testingUSB = true;
     var btn = _root.querySelector('#mr-test-usb');
     if (btn) {
       btn.disabled = true;
@@ -319,6 +327,8 @@
     } catch (err) {
       showMsg('USB test failed: ' + (err && err.message || err), false);
     } finally {
+      _testingUSB = false;
+      btn = _root && _root.querySelector('#mr-test-usb');
       if (btn) {
         btn.disabled = false;
         btn.textContent = 'Test USB';
