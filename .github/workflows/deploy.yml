@@ -22,6 +22,7 @@ env:
   STAGING_CONTAINER: corescope-staging-go
 
 # Pipeline:
+#   pipeline-plan → skip go-test/e2e on master merge commits (PR already validated)
 #   go-test → build-and-publish (:edge after Go/JS unit tests — does NOT wait for Playwright)
 #           ↘ e2e-test (Playwright, parallel with image publish)
 #   Master only: deploy staging (gated by vars.STAGING_ENABLED) → publish badges
@@ -29,10 +30,35 @@ env:
 
 jobs:
   # ───────────────────────────────────────────────────────────────
+  # 0. Plan — skip duplicate test runs on merge-to-master pushes
+  # ───────────────────────────────────────────────────────────────
+  pipeline-plan:
+    name: "📋 Pipeline plan"
+    runs-on: ubuntu-latest
+    outputs:
+      skip_tests: ${{ steps.plan.outputs.skip_tests }}
+    steps:
+      - id: plan
+        run: |
+          SKIP=false
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/master" ]]; then
+            FIRST_LINE=$(printf '%s' "${{ github.event.head_commit.message }}" | head -1)
+            if echo "$FIRST_LINE" | grep -qE '^Merge pull request #[0-9]+'; then
+              SKIP=true
+              echo "Fast path: merge commit — skip go-test + e2e (PR checks already passed)"
+              echo "## CI fast path" >> "$GITHUB_STEP_SUMMARY"
+              echo "Merge commit detected. Skipping go-test and Playwright; publishing :edge only." >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+          echo "skip_tests=$SKIP" >> "$GITHUB_OUTPUT"
+
+  # ───────────────────────────────────────────────────────────────
   # 1. Go Build & Test
   # ───────────────────────────────────────────────────────────────
   go-test:
     name: "✅ Go Build & Test"
+    needs: pipeline-plan
+    if: needs.pipeline-plan.outputs.skip_tests != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -243,7 +269,8 @@ jobs:
   # ───────────────────────────────────────────────────────────────
   e2e-test:
     name: "🎭 Playwright E2E Tests"
-    needs: [go-test]
+    needs: [pipeline-plan, go-test]
+    if: needs.pipeline-plan.outputs.skip_tests != 'true' && needs.go-test.result == 'success'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -577,8 +604,13 @@ jobs:
   build-and-publish:
     name: "🏗️ Build & Publish Docker Image"
     # Publish :edge as soon as Go/JS unit tests pass — do not wait for Playwright (~17m).
-    # E2E still runs in parallel and remains a required check for merge quality.
-    needs: [go-test]
+    # On merge commits, tests are skipped (PR already green) and we publish immediately.
+    needs: [pipeline-plan, go-test]
+    if: |
+      always() && (
+        needs.pipeline-plan.outputs.skip_tests == 'true' ||
+        needs.go-test.result == 'success'
+      )
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -665,7 +697,7 @@ jobs:
   release-artifacts:
     name: "📦 Release Artifacts"
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [go-test]
+    needs: [pipeline-plan, go-test]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -801,6 +833,7 @@ jobs:
       always()
       && github.event_name == 'push'
       && needs.build-and-publish.result == 'success'
+      && (needs.e2e-test.result == 'success' || needs.e2e-test.result == 'skipped')
     needs: [build-and-publish, e2e-test, deploy]
     runs-on: ubuntu-latest
     steps:

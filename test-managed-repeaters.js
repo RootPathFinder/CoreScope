@@ -41,9 +41,14 @@ assert.ok(src.includes('CMD_SEND_LOGIN') === false, 'no protocol constants leake
 assert.ok(src.includes('companion-poller'), 'UI mentions companion poller');
 
 const deployYml = fs.readFileSync(path.join(__dirname, '.github/workflows/deploy.yml'), 'utf8');
-assert.ok(/build-and-publish:[\s\S]*?needs:\s*\[go-test\]/.test(deployYml), 'build-and-publish waits on go-test only (not e2e)');
+assert.ok(/build-and-publish:[\s\S]*?needs:\s*\[pipeline-plan, go-test\]/.test(deployYml), 'build-and-publish waits on pipeline-plan + go-test (not e2e)');
+assert.ok(deployYml.includes('pipeline-plan'), 'deploy.yml has pipeline-plan job');
+assert.ok(deployYml.includes('skip_tests'), 'deploy.yml supports merge-commit test skip');
 assert.ok(deployYml.includes("vars.STAGING_ENABLED == 'true'"), 'deploy staging gated by STAGING_ENABLED');
-assert.ok(deployYml.includes('needs: [build-and-publish, e2e-test, deploy]'), 'badge publish does not hard-require staging');
+assert.ok(deployYml.includes('needs.e2e-test.result == \'skipped\''), 'publish tolerates skipped e2e on merge fast path');
+
+const heartbeatYml = fs.readFileSync(path.join(__dirname, '.github/workflows/squad-heartbeat.yml'), 'utf8');
+assert.ok(heartbeatYml.includes("cron: '0 */4 * * *'"), 'squad heartbeat runs every 4h not every 30m');
 
 const nodesSrc = fs.readFileSync(path.join(__dirname, 'public/nodes.js'), 'utf8');
 assert.ok(nodesSrc.includes('addMonitorBtn'), 'node detail has Add to monitoring button');
