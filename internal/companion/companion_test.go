@@ -623,6 +623,63 @@ func TestClientSendSelfAdvertError(t *testing.T) {
 	}
 }
 
+func TestSelfAdvertAndProbe_SurvivesTX(t *testing.T) {
+	// advert accepted (RESP_CODE_OK), then DEVICE_QUERY answers → device alive.
+	dev := make([]byte, 82)
+	dev[0] = RespDeviceInfo
+	dev[1] = 9
+	copy(dev[60:80], []byte("v2\x00"))
+	port := &scriptedPort{reads: [][][]byte{
+		{{RespOK}}, // SendSelfAdvert
+		{dev},      // QueryDeviceInfo probe
+	}}
+	c := NewClient(port, "diag")
+	alive, probeErr, err := c.SelfAdvertAndProbe(false, 0, time.Second)
+	if err != nil {
+		t.Fatalf("advert err=%v", err)
+	}
+	if !alive {
+		t.Fatalf("expected alive after successful probe, probeErr=%v", probeErr)
+	}
+	if probeErr != nil {
+		t.Fatalf("unexpected probeErr=%v", probeErr)
+	}
+}
+
+func TestSelfAdvertAndProbe_ResetDuringTX(t *testing.T) {
+	// advert accepted, then the CDC link drops (EOF) during the transmit window →
+	// caught by the post-TX probe. This is the control that proves RF TX itself
+	// resets the device (what SendSelfAdvert alone would miss).
+	port := &framedEOFPort{}
+	port.queue([]byte{RespOK}) // advert accepted; probe read then hits EOF
+	c := NewClient(port, "diag")
+	alive, probeErr, err := c.SelfAdvertAndProbe(false, 0, 300*time.Millisecond)
+	if err != nil {
+		t.Fatalf("advert command should succeed before TX, got err=%v", err)
+	}
+	if alive {
+		t.Fatal("expected alive=false when device drops during TX window")
+	}
+	if !IsDisconnected(probeErr) {
+		t.Fatalf("expected disconnect probeErr, got %v", probeErr)
+	}
+}
+
+func TestSelfAdvertAndProbe_AdvertRejected(t *testing.T) {
+	// If the advert command itself fails, err is returned and no probe runs.
+	port := &scriptedPort{reads: [][][]byte{
+		{{RespError, 0x05}},
+	}}
+	c := NewClient(port, "diag")
+	alive, _, err := c.SelfAdvertAndProbe(false, 0, time.Second)
+	if err == nil {
+		t.Fatal("expected error when advert command is rejected")
+	}
+	if alive {
+		t.Fatal("alive must be false when the advert command failed")
+	}
+}
+
 func TestBuildSetRadioParams(t *testing.T) {
 	// US/Canada recommended: 910.525 MHz, BW 62.5 kHz, SF 7, CR 5
 	p := RadioParams{FreqKHz: 910525, BandwidthHz: 62500, SF: 7, CR: 5}

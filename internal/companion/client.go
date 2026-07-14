@@ -118,6 +118,48 @@ func (c *Client) SendSelfAdvert(flood bool, timeout time.Duration) error {
 	return err
 }
 
+// SelfAdvertAndProbe sends a zero-hop self-advert (an RF transmit) and then,
+// after waiting `settle` for the transmit to physically complete, probes the
+// device to confirm it did NOT reset.
+//
+// This is what makes the advert a *valid* RF-TX control. SendSelfAdvert alone
+// returns on RESP_CODE_OK, which the firmware sends when it ACCEPTS/queues the
+// command — before the transmit actually runs — so it cannot observe a
+// TX-triggered reset. A login, by contrast, keeps the serial link open for the
+// whole transmit+reply window (~2s), which is exactly when a brownout/firmware
+// reset surfaces as EOF. Waiting out the airtime and re-probing removes that
+// blind spot so "advert works" is proven, not assumed.
+//
+// Returns:
+//   - alive=true  → device answered after the transmit (survived TX)
+//   - alive=false → probe hit a disconnect/EOF (device reset during/after TX)
+//   - err != nil  → the advert command itself failed (before the transmit ran)
+//
+// probeErr carries the probe result: a disconnect when alive=false, or a
+// non-disconnect note (e.g. older firmware lacking DEVICE_QUERY) when alive=true.
+func (c *Client) SelfAdvertAndProbe(flood bool, settle, timeout time.Duration) (alive bool, probeErr error, err error) {
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	if err := c.SendSelfAdvert(flood, timeout); err != nil {
+		return false, nil, err
+	}
+	if settle > 0 {
+		time.Sleep(settle)
+	}
+	// A lightweight query is enough to prove the CDC endpoint is still up.
+	_, probeErr = c.QueryDeviceInfo(timeout)
+	if probeErr == nil {
+		return true, nil, nil
+	}
+	if IsDisconnected(probeErr) {
+		return false, probeErr, nil
+	}
+	// Device answered with a non-disconnect error (e.g. unsupported cmd on older
+	// firmware) — the link is alive, which is all this control needs to prove.
+	return true, probeErr, nil
+}
+
 // SetRadioParams writes CMD_SET_RADIO_PARAMS (freq/bw/sf/cr) and waits for
 // RESP_CODE_OK. The companion applies the change live (no reboot over serial).
 func (c *Client) SetRadioParams(p RadioParams, timeout time.Duration) error {
