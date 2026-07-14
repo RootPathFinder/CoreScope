@@ -40,7 +40,7 @@ func WriteFrame(w io.Writer, payload []byte) error {
 	binary.LittleEndian.PutUint16(pkt[1:], uint16(len(payload)))
 	copy(pkt[3:], payload)
 	_, err := w.Write(pkt)
-	return err
+	return WrapSerialErr(err)
 }
 
 // FrameReader reassembles outbound (radio→app) frames from a byte stream.
@@ -64,13 +64,15 @@ func (fr *FrameReader) ReadFrame() ([]byte, error) {
 		n, err := fr.r.Read(fr.buf)
 		if n > 0 {
 			fr.acc = append(fr.acc, fr.buf[:n]...)
-			continue
+			if err == nil || err == io.EOF {
+				continue
+			}
 		}
 		if err != nil {
 			if ne, ok := err.(interface{ Timeout() bool }); ok && ne.Timeout() {
 				return nil, ErrTimeout
 			}
-			return nil, err
+			return nil, WrapSerialErr(err)
 		}
 	}
 }
