@@ -106,6 +106,7 @@ const tick = () => new Promise(r => setTimeout(r, 0));
   assert(/CLOCKBADGE:ok/.test(html), 'clock badge rendered from clock-skew data');
   assert(/42\.0%/.test(html) && /90\.0%/.test(html), 'traffic/bridge rendered as percentages');
   assert(/4\.01 V/.test(html), 'battery rendered in volts');
+  assert(/mr-add-monitor/.test(html) && /Monitor<\/button>/.test(html), 'Monitor action present for favorite repeaters');
   assert(/&harr;/.test(html) && /88/.test(html), 'favorite↔favorite affinity edge shown with weight');
   assert(!/href="#\/nodes\/CC/.test(html), 'affinity edge to non-favorite-repeater CC excluded');
 

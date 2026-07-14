@@ -271,10 +271,81 @@
     _root = null;
   }
 
+  /**
+   * Prompt for API key (if needed) + admin password, then POST to the vault.
+   * Used from node detail / My Repeaters "Add to monitoring" buttons.
+   * @returns {Promise<{ok:boolean, error?:string, already?:boolean}>}
+   */
+  async function promptAddMonitoring(publicKey, name) {
+    var pk = String(publicKey || '').trim().toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(pk)) {
+      return { ok: false, error: 'Invalid public key' };
+    }
+    var key = apiKey();
+    if (!key) {
+      key = window.prompt('Enter CoreScope API key (from config.json / CORESCOPE_API_KEY):', '') || '';
+      key = key.trim();
+      if (!key) return { ok: false, error: 'API key required' };
+      setApiKey(key);
+    }
+    var pass = window.prompt(
+      'Admin password for ' + (name || shortKey(pk)) + ' (max 15 characters):',
+      ''
+    );
+    if (pass == null) return { ok: false, error: 'Cancelled' };
+    pass = String(pass);
+    if (!pass) return { ok: false, error: 'Admin password required' };
+    if (pass.length > 15) return { ok: false, error: 'Admin password max 15 characters (companion protocol limit)' };
+
+    try {
+      var res = await fetch('/api/managed-repeaters', {
+        method: 'POST',
+        headers: headers(true),
+        body: JSON.stringify({
+          publicKey: pk,
+          name: (name && String(name).trim()) || '',
+          adminPassword: pass
+        })
+      });
+      var body = await res.json().catch(function () { return {}; });
+      if (res.status === 409) {
+        return { ok: false, already: true, error: (body && body.error) || 'Already in monitoring' };
+      }
+      if (!res.ok) {
+        return { ok: false, error: (body && body.error) || ('Add failed (' + res.status + ')') };
+      }
+      return { ok: true, id: body.id, publicKey: body.publicKey || pk };
+    } catch (err) {
+      return { ok: false, error: String(err && err.message || err) };
+    }
+  }
+
+  async function addMonitoringClick(publicKey, name) {
+    var result = await promptAddMonitoring(publicKey, name);
+    if (result.ok) {
+      if (window.confirm('Added to monitoring. Open the Repeaters page now?')) {
+        location.hash = '#/repeaters';
+      }
+      return result;
+    }
+    if (result.already) {
+      if (window.confirm('Already in monitoring. Open the Repeaters page?')) {
+        location.hash = '#/repeaters';
+      }
+      return result;
+    }
+    if (result.error && result.error !== 'Cancelled') {
+      window.alert(result.error);
+    }
+    return result;
+  }
+
   window.ManagedRepeatersPage = {
     shortKey: shortKey,
     fmtUptime: fmtUptime,
-    normalizeApiKeyStorageKey: function () { return LS_API_KEY; }
+    normalizeApiKeyStorageKey: function () { return LS_API_KEY; },
+    promptAddMonitoring: promptAddMonitoring,
+    addMonitoringClick: addMonitoringClick
   };
 
   registerPage('repeaters', { init: init, destroy: destroy });
