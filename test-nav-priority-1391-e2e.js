@@ -48,7 +48,7 @@ const HIGH_PRIORITY_HREFS = ['#/home', '#/packets', '#/map', '#/live', '#/nodes'
 // "active pill is non-high" branch where the bug surfaces.
 // #1396: extended to include /#/channels — operator screenshot at ~1024px
 // showed the entire inline strip EMPTY and More containing only "Tools".
-const NON_HIGH_ROUTES = ['#/perf', '#/audio-lab', '#/analytics', '#/observers', '#/channels'];
+const NON_HIGH_ROUTES = ['#/perf', '#/audio-lab', '#/analytics', '#/observers', '#/repeaters', '#/channels'];
 
 // Operator screenshot was ~1080px. Cover the narrow-desktop CSS branch
 // (≤1100) AND the measurement-loop branch (>1100) — bug reproduces in
