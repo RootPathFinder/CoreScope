@@ -176,12 +176,23 @@
     }).join('');
   }
 
+  function applyStatusBody(body) {
+    body = body || {};
+    var list = body.repeaters || [];
+    renderList(list);
+    renderCards(list);
+    renderCompanion(body.companion, body.statusUpdatedAt, body.contactCount);
+    renderContacts(body.contacts || [], body.contactsAt || '');
+    return list;
+  }
+
   async function refresh(silent) {
     if (!apiKey()) {
       if (!silent) showMsg('Enter your apiKey (from config.json) to manage repeaters.', false);
+      renderCompanion(null);
+      renderContacts([], '');
       renderList([]);
       renderCards([]);
-      renderContacts([], '');
       return;
     }
     try {
@@ -189,13 +200,10 @@
       var body = await res.json().catch(function () { return {}; });
       if (!res.ok) {
         if (!silent) showMsg((body && body.error) || ('List failed (' + res.status + ')'), false);
+        applyStatusBody(body);
         return;
       }
-      var list = body.repeaters || [];
-      renderList(list);
-      renderCards(list);
-      renderCompanion(body.companion, body.statusUpdatedAt, body.contactCount);
-      renderContacts(body.contacts || [], body.contactsAt || '');
+      var list = applyStatusBody(body);
       if (!silent) showMsg('Loaded ' + list.length + ' repeater(s).', true);
     } catch (err) {
       if (!silent) showMsg('List failed: ' + (err && err.message || err), false);

@@ -96,7 +96,7 @@ func (s *Server) handleListManagedRepeaters(w http.ResponseWriter, r *http.Reque
 			UpdatedAt:        v.UpdatedAt,
 		}
 		_, row.CompanionKnown = known[strings.ToLower(v.PublicKey)]
-		if snap, ok := statusDoc.Repeaters[v.PublicKey]; ok {
+		if snap, ok := pollSnapshotForKey(statusDoc.Repeaters, v.PublicKey); ok {
 			row.Poll = pollViewFromSnapshot(snap)
 		}
 		out = append(out, row)
@@ -113,15 +113,41 @@ func (s *Server) handleListManagedRepeaters(w http.ResponseWriter, r *http.Reque
 	if !statusDoc.ContactsAt.IsZero() {
 		resp.ContactsAt = statusDoc.ContactsAt.UTC().Format(timeRFC3339)
 	}
-	if !statusDoc.UpdatedAt.IsZero() {
-		resp.StatusAt = statusDoc.UpdatedAt.UTC().Format(timeRFC3339)
+	if hasCompanionStatus(statusDoc) {
 		c := statusDoc.Companion
 		resp.Companion = &c
+	}
+	if !statusDoc.UpdatedAt.IsZero() {
+		resp.StatusAt = statusDoc.UpdatedAt.UTC().Format(timeRFC3339)
 	}
 	writeJSON(w, resp)
 }
 
 const timeRFC3339 = "2006-01-02T15:04:05Z07:00"
+
+func hasCompanionStatus(doc companion.StatusFile) bool {
+	if !doc.UpdatedAt.IsZero() || !doc.ContactsAt.IsZero() {
+		return true
+	}
+	c := doc.Companion
+	return c.Port != "" || c.LastError != "" || c.ContactCount > 0
+}
+
+func pollSnapshotForKey(repeaters map[string]companion.PollSnapshot, publicKey string) (companion.PollSnapshot, bool) {
+	if repeaters == nil {
+		return companion.PollSnapshot{}, false
+	}
+	if snap, ok := repeaters[publicKey]; ok {
+		return snap, true
+	}
+	want := strings.ToLower(publicKey)
+	for k, snap := range repeaters {
+		if strings.ToLower(k) == want {
+			return snap, true
+		}
+	}
+	return companion.PollSnapshot{}, false
+}
 
 func pollViewFromSnapshot(snap companion.PollSnapshot) *ManagedRepeaterPollView {
 	pv := &ManagedRepeaterPollView{

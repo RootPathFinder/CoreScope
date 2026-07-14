@@ -205,6 +205,51 @@ func TestManagedRepeatersListIncludesCompanionContacts(t *testing.T) {
 	}
 }
 
+func TestManagedRepeatersListIncludesPollStatusCaseInsensitive(t *testing.T) {
+	const apiKey = "a-strong-api-key-for-testing"
+	_, router, dir := setupManagedRepeatersServer(t, apiKey)
+	pk := "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
+
+	createBody := `{"publicKey":"` + pk + `","name":"Hilltop","adminPassword":"s3cret"}`
+	req := httptest.NewRequest("POST", "/api/managed-repeaters", strings.NewReader(createBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", apiKey)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", w.Code, w.Body.String())
+	}
+
+	store := companion.OpenStatusStore(dir)
+	bat := companion.RepeaterStats{BatteryMv: 3810, UptimeSecs: 120}
+	// Poller historically keyed by mixed-case pubkey in some builds.
+	if err := store.Upsert(companion.CompanionInfo{Port: "/dev/ttyACM1", Baud: 115200, OK: true}, companion.PollSnapshot{
+		PublicKey: strings.ToUpper(pk),
+		Name:      "Hilltop",
+		PolledAt:  time.Now().UTC(),
+		OK:        true,
+		IsAdmin:   true,
+		Stats:     &bat,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req = httptest.NewRequest("GET", "/api/managed-repeaters", nil)
+	req.Header.Set("X-API-Key", apiKey)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("list: %d %s", w.Code, w.Body.String())
+	}
+	var list ManagedRepeatersListResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Repeaters) != 1 || list.Repeaters[0].Poll == nil || !list.Repeaters[0].Poll.OK {
+		t.Fatalf("repeaters=%+v", list.Repeaters)
+	}
+}
+
 func TestManagedRepeatersRequiresAPIKey(t *testing.T) {
 	const apiKey = "a-strong-api-key-for-testing"
 	_, router, _ := setupManagedRepeatersServer(t, apiKey)
