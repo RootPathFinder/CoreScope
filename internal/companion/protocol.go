@@ -128,16 +128,29 @@ func BuildGetContacts() []byte {
 }
 
 // BuildAddUpdateContact builds CMD_ADD_UPDATE_CONTACT for a new/updated contact.
-// Use OutPathZeroHop for poller-seeded contacts (avoids flood TX brownouts on USB power).
+// Layout matches meshcore_py / companion firmware updateContactFromFrame:
+//
+//	cmd + pubkey(32) + type + flags + out_path_len + path(64) + name(32)
+//	+ last_advert(4) + gps_lat(4) + gps_lon(4)
+//
+// Use OutPathZeroHop for poller-seeded contacts (direct RF, not flood).
 // Use OutPathUnknown only when intentionally requesting flood routing.
+// lastAdvert/latE6/lonE6 may be zero when seeding from the vault alone.
 func BuildAddUpdateContact(pk []byte, advType, flags, outPathLen uint8, name string) ([]byte, error) {
+	return BuildAddUpdateContactFull(pk, advType, flags, outPathLen, name, 0, 0, 0)
+}
+
+// BuildAddUpdateContactFull is BuildAddUpdateContact with advert timestamp / GPS.
+func BuildAddUpdateContactFull(pk []byte, advType, flags, outPathLen uint8, name string, lastAdvert uint32, latE6, lonE6 int32) ([]byte, error) {
 	if len(pk) != PubKeySize {
 		return nil, ErrBadPubkey
 	}
 	if len(name) > 32 {
 		name = name[:32]
 	}
-	frame := make([]byte, 1+PubKeySize+1+1+1+MaxPathSize+32)
+	// cmd(1)+pk(32)+type+flags+pathLen(3)+path(64)+name(32)+last_advert+lat+lon(12)
+	const trail = 12
+	frame := make([]byte, 1+PubKeySize+3+MaxPathSize+32+trail)
 	i := 0
 	frame[i] = CmdAddUpdateContact
 	i++
@@ -151,6 +164,12 @@ func BuildAddUpdateContact(pk []byte, advType, flags, outPathLen uint8, name str
 	i++
 	i += MaxPathSize // zero out_path bytes
 	copy(frame[i:], []byte(name))
+	i += 32
+	binary.LittleEndian.PutUint32(frame[i:], lastAdvert)
+	i += 4
+	binary.LittleEndian.PutUint32(frame[i:], uint32(latE6))
+	i += 4
+	binary.LittleEndian.PutUint32(frame[i:], uint32(lonE6))
 	return frame, nil
 }
 

@@ -46,7 +46,7 @@ Poller logs are verbose on failure: contact count, whether the pubkey is among c
 
 - Companion flashed as **Serial Companion** firmware (not repeater)
 - Device mounted into the poller container (e.g. `/dev/ttyACM1`)
-- Prefer a **powered USB hub / solid 5V supply** — LoRa TX (especially flood) can brown out weak USB ports and show as `EOF` / “companion USB disconnected during RF TX”. The poller forces **zero-hop** paths for seeded contacts (not flood), reconnects on disconnect, and continues to the next repeater. If disconnects persist on zero-hop too, fix the supply or ensure nothing else opens the companion serial port.
+- Prefer a **powered USB hub / solid 5V supply** — LoRa TX (especially flood) can brown out weak USB ports and show as `EOF` / “companion USB disconnected during RF TX”. The poller forces **zero-hop** paths for seeded contacts (not flood), reconnects on disconnect, and continues to the next repeater. If disconnects persist on zero-hop too: confirm only one process owns the tty, try the same login with official `meshcore-cli`, and check companion firmware stability on RF TX — not only the PSU.
 - Admin passwords ≤ **15 characters** (companion protocol limit)
 - UI `#/repeaters` shows companion contacts and marks each vaulted repeater as **On companion** / **Not on companion**
 

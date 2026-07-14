@@ -345,7 +345,7 @@ func disconnectHint(err error) string {
 	if err != nil {
 		base = base + " (" + err.Error() + ")"
 	}
-	return base + " — often a power brownout on TX; use a powered hub / better supply. Poller forces zero-hop (not flood) for seeded contacts; if this persists, check companion power and that nothing else has the serial port open."
+	return base + " — serial dropped while handling CMD_SEND_LOGIN (before or during RESP_CODE_SENT). Commands match meshcore_py; poller uses zero-hop for seeded contacts. Check: only one process owns the tty, companion firmware is stable on RF TX, and (if multi-hop) the contact has a learned path — not only power."
 }
 
 func logContacts(contacts []companion.Contact, reported uint32) {
