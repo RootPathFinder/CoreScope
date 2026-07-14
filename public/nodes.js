@@ -618,6 +618,7 @@
             <a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="btn-primary" style="flex:0 0 auto;text-decoration:none;font-size:12px;padding:4px 10px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> Analytics</a>
             <a href="#/nodes/${encodeURIComponent(n.public_key)}/reach" class="btn-primary" style="flex:0 0 auto;text-decoration:none;font-size:12px;padding:4px 10px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Reach</a>
             <a href="#/observers/${encodeURIComponent(n.public_key.toUpperCase())}" class="btn-primary" title="View this pubkey as an observer" style="flex:0 0 auto;text-decoration:none;font-size:12px;padding:4px 10px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> Observer →</a>
+            ${(n.role === 'repeater' || n.role === 'room') ? `<button type="button" class="btn-primary" id="addMonitorBtn" title="Store admin password and poll status via USB companion" style="flex:0 0 auto;font-size:12px;padding:4px 10px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-heartbeat"/></svg> Add to monitoring</button>` : ''}
           </div>
         </div>
 
@@ -789,6 +790,16 @@
           btn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> Copied!';
           setTimeout(() => btn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Copy short URL', 2000);
         });
+      });
+
+      // Active telemetry vault — add this repeater/room to managed monitoring.
+      document.getElementById('addMonitorBtn')?.addEventListener('click', () => {
+        const api = window.ManagedRepeatersPage;
+        if (!api || typeof api.addMonitoringClick !== 'function') {
+          window.alert('Monitoring UI not loaded yet — refresh and try again.');
+          return;
+        }
+        api.addMonitoringClick(n.public_key, n.name || '');
       });
 
       // Deep-link scroll: ?section=node-packets or ?section=node-packets

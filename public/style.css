@@ -5588,4 +5588,40 @@ body.embed #app.app-fixed {
   margin-bottom: 0.5rem;
 }
 .managed-repeaters-page .mr-toolbar h3 { margin: 0; }
+.managed-repeaters-page .mr-companion-row {
+  display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center;
+}
+.managed-repeaters-page .mr-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1rem;
+  margin: 0.75rem 0 1.25rem;
+}
+.managed-repeaters-page .mr-monitor-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card-bg, var(--bg-secondary, transparent));
+  padding: 0.9rem 1rem;
+}
+.managed-repeaters-page .mr-monitor-head {
+  display: flex; justify-content: space-between; gap: 0.75rem; align-items: flex-start;
+  margin-bottom: 0.75rem;
+}
+.managed-repeaters-page .mr-stat-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem 0.75rem;
+  font-size: 0.9rem;
+}
+.managed-repeaters-page .mr-stat-label {
+  display: block; color: var(--text-muted, #6b7280); font-size: 0.75rem;
+}
+.managed-repeaters-page .mr-stat-val { font-variant-numeric: tabular-nums; }
+.managed-repeaters-page .mr-monitor-foot { margin-top: 0.75rem; font-size: 0.8rem; }
+.managed-repeaters-page .mr-pill {
+  display: inline-block; padding: 0.15rem 0.55rem; border-radius: 999px;
+  font-size: 0.75rem; border: 1px solid var(--border);
+}
+.managed-repeaters-page .mr-pill-ok { color: var(--status-green, #45644c); border-color: currentColor; }
+.managed-repeaters-page .mr-pill-bad { color: var(--status-red, #b54a4a); border-color: currentColor; }
+.managed-repeaters-page .mr-pill-muted { color: var(--text-muted, #6b7280); }
+.managed-repeaters-page .mr-err { color: var(--status-red, #b54a4a); margin: 0.25rem 0; }
 

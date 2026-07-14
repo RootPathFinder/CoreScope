@@ -2518,6 +2518,7 @@
             <td>${n.last_relayed ? timeAgo(n.last_relayed) : '—'}</td>
             <td>${(n.last_heard || n.last_seen) ? timeAgo(n.last_heard || n.last_seen) : '—'}</td>
             <td style="text-align:right">${battery}</td>
+            <td><button type="button" class="btn btn-sm mr-add-monitor" data-pubkey="${esc(n.public_key)}" data-name="${esc(n.name || '')}" title="Store admin password for companion polling">Monitor</button></td>
           </tr>`;
         }).join('');
 
@@ -2575,8 +2576,9 @@
                 <th scope="col">Last Relayed</th>
                 <th scope="col">Last Heard</th>
                 <th scope="col" style="text-align:right">Battery</th>
+                <th scope="col">Actions</th>
               </tr></thead>
-              <tbody>${rowsHtml || '<tr><td colspan="12" class="text-muted">None of your favorites are repeaters/rooms in this view.</td></tr>'}</tbody>
+              <tbody>${rowsHtml || '<tr><td colspan="13" class="text-muted">None of your favorites are repeaters/rooms in this view.</td></tr>'}</tbody>
             </table>
 
             <h3 style="margin-top:28px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-graph"/></svg> Links Between My Repeaters</h3>
@@ -2586,6 +2588,21 @@
 
         // Live un-star: re-paint from cache (no refetch) when a star toggles.
         if (typeof bindFavStars === 'function') bindFavStars(el, paint);
+        // Add to monitoring (managed repeaters vault) — event delegation survives re-paint.
+        if (!el._mrMonitorBound && typeof el.addEventListener === 'function') {
+          el._mrMonitorBound = true;
+          el.addEventListener('click', function (ev) {
+            var btn = ev.target && ev.target.closest ? ev.target.closest('.mr-add-monitor') : null;
+            if (!btn) return;
+            ev.preventDefault();
+            var api = window.ManagedRepeatersPage;
+            if (!api || typeof api.addMonitoringClick !== 'function') {
+              window.alert('Monitoring UI not loaded yet — refresh and try again.');
+              return;
+            }
+            api.addMonitoringClick(btn.getAttribute('data-pubkey'), btn.getAttribute('data-name') || '');
+          });
+        }
       }
       paint();
     } catch (e) {

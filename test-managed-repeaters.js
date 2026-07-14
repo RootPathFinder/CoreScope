@@ -30,6 +30,20 @@ vm.runInContext(src, ctx);
 assert.ok(ctx.window.ManagedRepeatersPage, 'ManagedRepeatersPage global exported');
 assert.strictEqual(ctx.window.ManagedRepeatersPage.shortKey('aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899'), 'aabbccdd…8899');
 assert.strictEqual(ctx.window.ManagedRepeatersPage.normalizeApiKeyStorageKey(), 'meshcore-api-key');
+assert.strictEqual(ctx.window.ManagedRepeatersPage.fmtUptime(90), '1m');
+assert.strictEqual(typeof ctx.window.ManagedRepeatersPage.promptAddMonitoring, 'function', 'promptAddMonitoring exported');
+assert.strictEqual(typeof ctx.window.ManagedRepeatersPage.addMonitoringClick, 'function', 'addMonitoringClick exported');
+assert.ok(src.includes('mr-cards'), 'UI renders monitoring cards');
+assert.ok(src.includes('CMD_SEND_LOGIN') === false, 'no protocol constants leaked into UI');
+assert.ok(src.includes('companion-poller'), 'UI mentions companion poller');
+
+const nodesSrc = fs.readFileSync(path.join(__dirname, 'public/nodes.js'), 'utf8');
+assert.ok(nodesSrc.includes('addMonitorBtn'), 'node detail has Add to monitoring button');
+assert.ok(nodesSrc.includes('addMonitoringClick'), 'node detail wires ManagedRepeatersPage.addMonitoringClick');
+
+const analyticsSrc = fs.readFileSync(path.join(__dirname, 'public/analytics.js'), 'utf8');
+assert.ok(analyticsSrc.includes('mr-add-monitor'), 'My Repeaters tab has Monitor action');
+assert.ok(analyticsSrc.includes('addMonitoringClick'), 'My Repeaters wires addMonitoringClick');
 
 const bottomNav = fs.readFileSync(path.join(__dirname, 'public/bottom-nav.js'), 'utf8');
 assert.ok(bottomNav.includes("route: 'repeaters'"), 'bottom-nav includes repeaters route');
