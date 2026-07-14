@@ -100,6 +100,21 @@ func TestParseRepeaterStatsTagged(t *testing.T) {
 	}
 }
 
+func TestBuildLoginMatchesMeshcorePy(t *testing.T) {
+	// meshcore_py: data = b"\x1a" + dst_bytes + pwd.encode("utf-8")
+	pk := bytes.Repeat([]byte{0xAB}, 32)
+	frame, err := BuildLogin(pk, "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame[0] != CmdSendLogin || len(frame) != 1+32+6 {
+		t.Fatalf("frame=%x", frame)
+	}
+	if !bytes.Equal(frame[1:33], pk) || string(frame[33:]) != "secret" {
+		t.Fatalf("payload mismatch %x", frame)
+	}
+}
+
 func TestBuildLoginRejectsLongPassword(t *testing.T) {
 	pk := make([]byte, 32)
 	_, err := BuildLogin(pk, "this-password-is-way-too-long")
@@ -368,20 +383,43 @@ func TestIsDisconnectedAndWrap(t *testing.T) {
 
 func TestBuildAddUpdateContact(t *testing.T) {
 	pk := bytes.Repeat([]byte{0xFE}, 32)
-	frame, err := BuildAddUpdateContact(pk, AdvTypeRepeater, 0, "Hilltop")
+	frame, err := BuildAddUpdateContact(pk, AdvTypeRepeater, 0, OutPathZeroHop, "Hilltop")
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantLen := 1 + PubKeySize + 1 + 1 + 1 + MaxPathSize + 32
+	// Matches meshcore_py update_contact: … + name(32) + last_advert + lat + lon
+	wantLen := 1 + PubKeySize + 3 + MaxPathSize + 32 + 12
 	if len(frame) != wantLen || frame[0] != CmdAddUpdateContact {
-		t.Fatalf("len=%d code=%02x", len(frame), frame[0])
+		t.Fatalf("len=%d code=%02x wantLen=%d", len(frame), frame[0], wantLen)
 	}
-	if frame[1+PubKeySize] != AdvTypeRepeater || frame[1+PubKeySize+2] != OutPathUnknown {
+	if frame[1+PubKeySize] != AdvTypeRepeater || frame[1+PubKeySize+2] != OutPathZeroHop {
 		t.Fatalf("type/path=%02x %02x", frame[1+PubKeySize], frame[1+PubKeySize+2])
 	}
 	nameOff := 1 + PubKeySize + 3 + MaxPathSize
 	if string(frame[nameOff:nameOff+7]) != "Hilltop" {
 		t.Fatalf("name=%q", string(frame[nameOff:nameOff+32]))
+	}
+	trail := frame[nameOff+32:]
+	if len(trail) != 12 || trail[0] != 0 || trail[4] != 0 {
+		t.Fatalf("trail last_advert/lat/lon not zero-padded: %x", trail)
+	}
+	full, err := BuildAddUpdateContactFull(pk, AdvTypeRepeater, 0, OutPathZeroHop, "Hilltop", 0x11223344, -123456789, 987654321)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tsOff := nameOff + 32
+	if binary.LittleEndian.Uint32(full[tsOff:tsOff+4]) != 0x11223344 {
+		t.Fatalf("last_advert=%x", full[tsOff:tsOff+4])
+	}
+	if int32(binary.LittleEndian.Uint32(full[tsOff+4:tsOff+8])) != -123456789 {
+		t.Fatalf("lat")
+	}
+	if int32(binary.LittleEndian.Uint32(full[tsOff+8:tsOff+12])) != 987654321 {
+		t.Fatalf("lon")
+	}
+	flood, err := BuildAddUpdateContact(pk, AdvTypeRepeater, 0, OutPathUnknown, "Hilltop")
+	if err != nil || flood[1+PubKeySize+2] != OutPathUnknown {
+		t.Fatalf("flood path byte: %v", err)
 	}
 }
 
@@ -391,7 +429,7 @@ func TestClientAddOrUpdateContact(t *testing.T) {
 		{{RespOK}},
 	}}
 	c := NewClient(port, "test")
-	if err := c.AddOrUpdateContact(pkHex, AdvTypeRepeater, "Hilltop", time.Second); err != nil {
+	if err := c.AddOrUpdateContact(pkHex, AdvTypeRepeater, "Hilltop", OutPathZeroHop, time.Second); err != nil {
 		t.Fatal(err)
 	}
 }

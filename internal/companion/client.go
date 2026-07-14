@@ -109,8 +109,9 @@ func (c *Client) LoginAndStatus(pubKeyHex, password string, timeout time.Duratio
 	return login, status, err
 }
 
-// AddOrUpdateContact seeds a contact on the companion (flood path until advert heard).
-func (c *Client) AddOrUpdateContact(pubKeyHex string, advType uint8, name string, timeout time.Duration) error {
+// AddOrUpdateContact seeds or updates a contact on the companion.
+// outPathLen should be OutPathZeroHop for poller use, or OutPathUnknown for flood.
+func (c *Client) AddOrUpdateContact(pubKeyHex string, advType uint8, name string, outPathLen uint8, timeout time.Duration) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -121,7 +122,7 @@ func (c *Client) AddOrUpdateContact(pubKeyHex string, advType uint8, name string
 	if err != nil {
 		return err
 	}
-	frame, err := BuildAddUpdateContact(pk, advType, 0, name)
+	frame, err := BuildAddUpdateContact(pk, advType, 0, outPathLen, name)
 	if err != nil {
 		return err
 	}
