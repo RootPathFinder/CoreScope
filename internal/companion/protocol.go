@@ -22,6 +22,7 @@ const (
 	CmdDeviceQuery      byte = 0x16
 	CmdSendLogin        byte = 0x1A
 	CmdSendStatusReq    byte = 0x1B
+	CmdHasConnection    byte = 0x1C // CMD_HAS_CONNECTION (RESP_CODE_OK if active login session)
 	CmdLogout           byte = 0x1D
 	CmdSendTelemetry    byte = 0x27
 	CmdGetStats         byte = 0x38 // CMD_GET_STATS (v8+; byte1 = stats type)
@@ -525,6 +526,20 @@ func BuildStatusReq(pubKey []byte) ([]byte, error) {
 	}
 	frame := make([]byte, 1+PubKeySize)
 	frame[0] = CmdSendStatusReq
+	copy(frame[1:], pubKey)
+	return frame, nil
+}
+
+// BuildHasConnection builds CMD_HAS_CONNECTION. The firmware replies
+// RESP_CODE_OK if it holds an active (keep-alive'd) login session to the
+// contact, or RESP_CODE_ERR(NOT_FOUND) otherwise. Used after a serial drop to
+// tell whether a login actually succeeded device-side (only the reply was lost).
+func BuildHasConnection(pubKey []byte) ([]byte, error) {
+	if len(pubKey) != PubKeySize {
+		return nil, ErrBadPubkey
+	}
+	frame := make([]byte, 1+PubKeySize)
+	frame[0] = CmdHasConnection
 	copy(frame[1:], pubKey)
 	return frame, nil
 }

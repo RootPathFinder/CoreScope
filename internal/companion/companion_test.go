@@ -678,6 +678,64 @@ func TestTracePortLogsReadsAndWrites(t *testing.T) {
 	}
 }
 
+func TestClientHasConnection(t *testing.T) {
+	pkHex := hex.EncodeToString(bytes.Repeat([]byte{0x22}, 32))
+
+	// Active session → RESP_CODE_OK → connected.
+	okPort := &scriptedPort{reads: [][][]byte{{{RespOK}}}}
+	connected, err := NewClient(okPort, "t").HasConnection(pkHex, time.Second)
+	if err != nil || !connected {
+		t.Fatalf("expected connected, got connected=%v err=%v", connected, err)
+	}
+
+	// No session → RESP_CODE_ERR(NOT_FOUND) → not connected, no error.
+	errPort := &scriptedPort{reads: [][][]byte{{{RespError, 0x02}}}}
+	connected, err = NewClient(errPort, "t").HasConnection(pkHex, time.Second)
+	if err != nil || connected {
+		t.Fatalf("expected not-connected/no-error, got connected=%v err=%v", connected, err)
+	}
+
+	// Serial drop → surfaced as an error.
+	eofPort := &framedEOFPort{}
+	connected, err = NewClient(eofPort, "t").HasConnection(pkHex, 300*time.Millisecond)
+	if err == nil || connected {
+		t.Fatalf("expected disconnect error, got connected=%v err=%v", connected, err)
+	}
+	if !IsDisconnected(err) {
+		t.Fatalf("expected disconnect chain, got %v", err)
+	}
+
+	got, berr := BuildHasConnection(bytes.Repeat([]byte{0x22}, PubKeySize))
+	if berr != nil || len(got) != 1+PubKeySize || got[0] != CmdHasConnection {
+		t.Fatalf("BuildHasConnection frame=%x err=%v", got, berr)
+	}
+}
+
+func TestClientStatusOnly(t *testing.T) {
+	pkHex := hex.EncodeToString(bytes.Repeat([]byte{0x44}, 32))
+	pk, _ := DecodePubKey(pkHex)
+
+	sent := make([]byte, 10)
+	sent[0] = RespMsgSent
+	binary.LittleEndian.PutUint32(sent[6:10], 100)
+
+	statsBody := make([]byte, 4+52)
+	binary.LittleEndian.PutUint16(statsBody[4:6], 3720)
+	st := make([]byte, 8+len(statsBody))
+	st[0] = PushStatusResponse
+	copy(st[2:8], pk[:6])
+	copy(st[8:], statsBody)
+
+	port := &scriptedPort{reads: [][][]byte{{sent, st}}}
+	status, err := NewClient(port, "t").StatusOnly(pkHex, 2*time.Second)
+	if err != nil {
+		t.Fatalf("StatusOnly: %v", err)
+	}
+	if status.Stats.BatteryMv != 3720 {
+		t.Fatalf("status=%+v", status.Stats)
+	}
+}
+
 func TestParseCoreStats(t *testing.T) {
 	// code(1)+type(1)+batt(2)+uptime(4)+errflags(2)+queue(1)
 	frame := make([]byte, 11)

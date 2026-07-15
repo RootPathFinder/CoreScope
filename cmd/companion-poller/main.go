@@ -338,11 +338,20 @@ func pollOnce(vault *repeatervault.Store, status *companion.StatusStore, serialP
 			}
 			link = re
 			_ = status.SetCompanion(link.info)
-			logRebootEvidence(link, uptimeBefore, fmt.Sprintf("poll %s (%s)", short(r.PublicKey), r.Name))
-			// Re-assert zero-hop after reconnect — contact table may still say flood.
-			_ = link.client.AddOrUpdateContact(r.PublicKey, companion.AdvTypeRepeater, seedName, companion.OutPathZeroHop, 5*time.Second)
-			log.Printf("poll %s (%s): retrying zero-hop login after reconnect", short(r.PublicKey), r.Name)
-			login, st, err = link.client.LoginAndStatus(r.PublicKey, pass, timeout)
+			ctx := fmt.Sprintf("poll %s (%s)", short(r.PublicKey), r.Name)
+			logRebootEvidence(link, uptimeBefore, ctx)
+			// Did the login that just "dropped" actually succeed device-side (only
+			// the serial reply was lost)? If so, skip the re-login and read status.
+			if connected := logSessionEvidence(link, r.PublicKey, ctx); connected {
+				login.OK = true
+				login.IsAdmin = true
+				st, err = link.client.StatusOnly(r.PublicKey, timeout)
+			} else {
+				// Re-assert zero-hop after reconnect — contact table may still say flood.
+				_ = link.client.AddOrUpdateContact(r.PublicKey, companion.AdvTypeRepeater, seedName, companion.OutPathZeroHop, 5*time.Second)
+				log.Printf("%s: retrying zero-hop login after reconnect", ctx)
+				login, st, err = link.client.LoginAndStatus(r.PublicKey, pass, timeout)
+			}
 		}
 
 		snap.DurationMs = time.Since(start).Milliseconds()
@@ -362,7 +371,9 @@ func pollOnce(vault *repeatervault.Store, status *companion.StatusStore, serialP
 				}
 				link = re
 				_ = status.SetCompanion(link.info)
-				logRebootEvidence(link, uptimeBefore, fmt.Sprintf("poll %s (%s)", short(r.PublicKey), r.Name))
+				skipCtx := fmt.Sprintf("poll %s (%s)", short(r.PublicKey), r.Name)
+				logRebootEvidence(link, uptimeBefore, skipCtx)
+				logSessionEvidence(link, r.PublicKey, skipCtx)
 				continue
 			case errors.Is(err, companion.ErrNotFound):
 				snap.Error = companion.NotFoundHint(r.PublicKey, contacts)
@@ -719,6 +730,26 @@ func readUptime(link *liveLink) uint32 {
 		return 0
 	}
 	return cs.UptimeSecs
+}
+
+// logSessionEvidence checks whether the companion still holds an active login
+// session after a serial drop. A live session proves the login actually
+// succeeded device-side and only the serial reply was lost over USB — i.e. the
+// drop did NOT fail the login. Returns true when a session is present.
+func logSessionEvidence(link *liveLink, pubKeyHex, ctx string) bool {
+	if link == nil || link.client == nil {
+		return false
+	}
+	connected, err := link.client.HasConnection(pubKeyHex, 3*time.Second)
+	if err != nil {
+		return false
+	}
+	if connected {
+		log.Printf("%s: LOGIN SUCCEEDED device-side — companion holds an active session after the serial drop; only the USB reply was lost. Reading status without re-login.", ctx)
+		return true
+	}
+	log.Printf("%s: no active login session after reconnect — login did not complete device-side (consistent with a device reset or a dropped request).", ctx)
+	return false
 }
 
 // logRebootEvidence reads the companion uptime after a reconnect and logs
