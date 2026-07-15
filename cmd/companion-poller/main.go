@@ -335,40 +335,35 @@ func pollOnce(vault *repeatervault.Store, status *companion.StatusStore, serialP
 
 		if companion.IsDisconnected(err) {
 			dropErr := err
+			ctx := fmt.Sprintf("poll %s (%s)", short(r.PublicKey), r.Name)
 			link.close()
-			var re *liveLink
-			re, err = reconnectAfterDisconnect(serialPath, baud, dropErr)
-			if err != nil {
+			re, rerr := reconnectAfterDisconnect(serialPath, baud, dropErr)
+			if rerr != nil {
 				snap.OK = false
-				snap.Error = disconnectHint(err)
+				snap.Error = disconnectHint(rerr)
 				snap.DurationMs = time.Since(start).Milliseconds()
 				_ = status.Upsert(link.info, snap)
-				log.Printf("poll %s (%s): FAIL %s — aborting cycle", short(r.PublicKey), r.Name, snap.Error)
-				return fmt.Errorf("companion reconnect failed: %w", err)
+				log.Printf("%s: FAIL %s — aborting cycle", ctx, snap.Error)
+				return fmt.Errorf("companion reconnect failed: %w", rerr)
 			}
 			link = re
 			_ = status.SetCompanion(link.info)
-			ctx := fmt.Sprintf("poll %s (%s)", short(r.PublicKey), r.Name)
 			logRebootEvidence(link, uptimeBefore, ctx)
-			logSessionProbe(link, r.PublicKey, ctx) // informational only (keep_alive=0 → usually false)
+			logSessionProbe(link, r.PublicKey, ctx)
 
-			// Prefer StatusOnly after any secure-request disconnect. If a prior
-			// login landed on-air, the repeater already has us in ACL.
-			log.Printf("%s: trying status-only recovery after CDC hangup (queued=%v)", ctx, loginQueuedBeforeDrop(dropErr))
-			st, err = link.client.StatusOnly(r.PublicKey, timeout)
-			if err == nil {
-				login.OK = true
-				login.IsAdmin = true
-				log.Printf("%s: status-only recovery OK — ACL session usable; only the USB reply was lost", ctx)
-			} else if companion.IsDisconnected(err) {
-				log.Printf("%s: status-only also hit CDC hangup — cooling down %s before next secure command", ctx, cdcHangupCooldown)
-				time.Sleep(cdcHangupCooldown)
-			} else {
-				log.Printf("%s: status-only failed (%v) — cooling down %s then logging in (flood path)", ctx, err, cdcHangupCooldown)
-				time.Sleep(cdcHangupCooldown)
-				_ = link.client.AddOrUpdateContact(r.PublicKey, companion.AdvTypeRepeater, seedName, companion.OutPathUnknown, 5*time.Second)
-				login, st, err = link.client.LoginAndStatus(r.PublicKey, pass, timeout)
-			}
+			// Do NOT issue another status/login RF TX in this cycle. Production
+			// logs showed StatusOnly recovery immediately re-hung the CDC
+			// (flood hangup → reconnect → zero-hop hangup → app_start EOF).
+			// Reconnect is for diagnostics + a usable link for the next repeater;
+			// cool down and skip this one.
+			snap.OK = false
+			snap.Error = disconnectHint(dropErr)
+			snap.DurationMs = time.Since(start).Milliseconds()
+			_ = status.Upsert(link.info, snap)
+			log.Printf("%s: FAIL %s — skipping RF recovery this cycle (CDC hangup on secure TX; advert self-test still OK means host USB/CDC under secure-TX load)", ctx, snap.Error)
+			log.Printf("%s: CDC cooldown %s before next repeater", ctx, cdcHangupCooldown)
+			time.Sleep(cdcHangupCooldown)
+			continue
 		}
 
 		snap.DurationMs = time.Since(start).Milliseconds()
