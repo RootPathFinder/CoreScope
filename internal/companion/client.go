@@ -374,7 +374,9 @@ func ackRouting(a SentAck) string {
 }
 
 // AddOrUpdateContact seeds or updates a contact on the companion.
-// outPathLen should be OutPathZeroHop for poller use, or OutPathUnknown for flood.
+// outPathLen should be OutPathUnknown (flood) when seeding unseen contacts, or
+// the companion's learned path length. Do not force OutPathZeroHop for
+// multi-hop managed repeaters.
 func (c *Client) AddOrUpdateContact(pubKeyHex string, advType uint8, name string, outPathLen uint8, timeout time.Duration) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()

@@ -60,7 +60,9 @@ const (
 
 	// OutPathUnknown is firmware OUT_PATH_UNKNOWN — login uses flood routing.
 	OutPathUnknown = 0xFF
-	// OutPathZeroHop is an empty direct path — login uses zero-hop TX (less energy than flood).
+	// OutPathZeroHop is an empty direct path — login uses zero-hop TX.
+	// Only appropriate when the companion is RF-adjacent to the target.
+	// The poller must NOT force this for managed repeaters (most are multi-hop).
 	OutPathZeroHop = 0
 )
 
@@ -359,8 +361,9 @@ func trimZ(b []byte) string {
 //	cmd + pubkey(32) + type + flags + out_path_len + path(64) + name(32)
 //	+ last_advert(4) + gps_lat(4) + gps_lon(4)
 //
-// Use OutPathZeroHop for poller-seeded contacts (direct RF, not flood).
-// Use OutPathUnknown only when intentionally requesting flood routing.
+// Use OutPathUnknown when seeding contacts the companion has not heard yet
+// (flood routing). Prefer leaving a learned multi-hop path intact.
+// Do NOT force OutPathZeroHop unless the companion is known RF-adjacent.
 // lastAdvert/latE6/lonE6 may be zero when seeding from the vault alone.
 func BuildAddUpdateContact(pk []byte, advType, flags, outPathLen uint8, name string) ([]byte, error) {
 	return BuildAddUpdateContactFull(pk, advType, flags, outPathLen, name, 0, 0, 0)
