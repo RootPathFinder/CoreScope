@@ -9,6 +9,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -620,6 +621,60 @@ func TestClientSendSelfAdvertError(t *testing.T) {
 	c := NewClient(port, "diag")
 	if err := c.SendSelfAdvert(false, time.Second); err == nil {
 		t.Fatal("expected error from RESP_CODE_ERR")
+	}
+}
+
+func TestClassifyErr(t *testing.T) {
+	if got := ClassifyErr(nil); got != "" {
+		t.Fatalf("nil should classify empty, got %q", got)
+	}
+	if got := ClassifyErr(io.EOF); !strings.Contains(got, "EOF") || !strings.Contains(got, "0 bytes") {
+		t.Fatalf("EOF classify=%q", got)
+	}
+	// A real syscall errno must be identified as a device/USB fault, even wrapped.
+	wrapped := fmt.Errorf("read: %w", syscall.EIO)
+	if got := ClassifyErr(wrapped); !strings.Contains(got, "errno") || !strings.Contains(got, "real device/USB fault") {
+		t.Fatalf("errno classify=%q", got)
+	}
+}
+
+func TestWrapSerialErrPreservesChain(t *testing.T) {
+	// Multi-%w must keep BOTH ErrDisconnected and the underlying io.EOF reachable
+	// so ClassifyErr / IsDisconnected both work on the aggregated error.
+	w := WrapSerialErr(io.EOF)
+	if !IsDisconnected(w) {
+		t.Fatalf("wrapped EOF must be a disconnect: %v", w)
+	}
+	if !errors.Is(w, io.EOF) {
+		t.Fatalf("wrapped error must still be io.EOF in chain: %v", w)
+	}
+	// And an EIO must remain reachable as a syscall.Errno.
+	we := WrapSerialErr(syscall.EIO)
+	var errno syscall.Errno
+	if !errors.As(we, &errno) || errno != syscall.EIO {
+		t.Fatalf("wrapped EIO must remain a syscall.Errno: %v", we)
+	}
+}
+
+func TestTracePortLogsReadsAndWrites(t *testing.T) {
+	var lines []string
+	logf := func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) }
+
+	port := &scriptedPort{reads: [][][]byte{{{RespOK}}}}
+	tp := NewTracePort(port, "ttyTEST", logf)
+	// Write triggers the scripted reply; then read it back.
+	if _, err := tp.Write([]byte{frameInMarker, 1, 0, CmdSendSelfAdvert}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	buf := make([]byte, 64)
+	_, _ = tp.Read(buf)
+
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "write n=") || !strings.Contains(joined, "ttyTEST") {
+		t.Fatalf("expected write trace, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "read n=") || !strings.Contains(joined, "hex=") {
+		t.Fatalf("expected read trace with hex, got:\n%s", joined)
 	}
 }
 

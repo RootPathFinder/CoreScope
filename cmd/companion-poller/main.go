@@ -23,6 +23,12 @@ import (
 	"github.com/meshcore-analyzer/repeatervault"
 )
 
+// Deep-diagnostic knobs, set from env in main().
+var (
+	verboseSerial bool   // COMPANION_VERBOSE: byte-level serial trace
+	onlyPubKey    string // COMPANION_ONLY_PUBKEY: poll only this repeater (prefix match)
+)
+
 func main() {
 	configDir := flag.String("config-dir", envOr("CORESCOPE_CONFIG_DIR", "/app"), "Directory containing data/ (vault + status)")
 	serialPath := flag.String("serial", envOr("COMPANION_SERIAL", "/dev/ttyACM1"), "USB companion serial device")
@@ -31,6 +37,18 @@ func main() {
 	perTimeout := flag.Duration("timeout", envDuration("COMPANION_POLL_TIMEOUT", 20*time.Second), "Per-repeater RF timeout")
 	once := flag.Bool("once", false, "Run a single poll cycle and exit")
 	flag.Parse()
+
+	// Deep-diagnostic knobs (env-gated; safe to leave unset):
+	//   COMPANION_VERBOSE=1            → byte-level serial trace + errno classification
+	//   COMPANION_ONLY_PUBKEY=<hex>    → poll only the matching repeater (prefix ok)
+	verboseSerial = envBool("COMPANION_VERBOSE", false)
+	onlyPubKey = strings.ToLower(strings.TrimSpace(os.Getenv("COMPANION_ONLY_PUBKEY")))
+	if verboseSerial {
+		log.Printf("verbose serial tracing ENABLED (COMPANION_VERBOSE=1)")
+	}
+	if onlyPubKey != "" {
+		log.Printf("single-repeater monitor ENABLED (COMPANION_ONLY_PUBKEY=%s) — other repeaters skipped", onlyPubKey)
+	}
 
 	apiKey := ""
 	if cfg, err := loadAPIKey(*configDir); err == nil {
@@ -115,6 +133,9 @@ func openCompanion(serialPath string, baud int) (*liveLink, error) {
 		return &liveLink{info: info}, err
 	}
 	info.OK = true
+	if verboseSerial {
+		port = companion.NewTracePort(port, filepath.Base(serialPath), log.Printf)
+	}
 	client := companion.NewClient(port, "corescope-poller")
 	if err := client.Handshake(5 * time.Second); err != nil {
 		_ = port.Close()
@@ -194,6 +215,19 @@ func pollOnce(vault *repeatervault.Store, status *companion.StatusStore, serialP
 	list, err := vault.List()
 	if err != nil {
 		return err
+	}
+	if onlyPubKey != "" {
+		filtered := list[:0:0]
+		for _, r := range list {
+			if strings.HasPrefix(strings.ToLower(r.PublicKey), onlyPubKey) {
+				filtered = append(filtered, r)
+			}
+		}
+		list = filtered
+		if len(list) == 0 {
+			log.Printf("COMPANION_ONLY_PUBKEY=%s matched no managed repeater — nothing to poll", onlyPubKey)
+			return nil
+		}
 	}
 	if len(list) == 0 {
 		log.Printf("no managed repeaters in vault (companion contacts=%d)", len(contacts))
@@ -713,15 +747,18 @@ func disconnectHint(err error) string {
 	if err != nil {
 		msg = err.Error()
 	}
+	// Precise error class (bare EOF/CDC hangup vs real syscall errno) — the key
+	// signal when the host shows no USB disconnect in dmesg.
+	class := companion.ClassifyErr(err)
 	switch {
 	case strings.Contains(msg, "no RESP_CODE_SENT"):
 		// Reset happened before RESP_CODE_SENT → before the transmit was queued.
-		return "companion reset BEFORE RESP_CODE_SENT (" + msg + ") — the link dropped while the firmware was building the login packet (ECDH/crypto), before the transmit was queued. Run the advert self-test (mode=advert): its post-TX liveness check tells you whether a bare RF transmit also resets this device (→ RF/power/firmware TX) or only secure requests do (→ login/crypto path)."
+		return "companion reset BEFORE RESP_CODE_SENT (" + msg + ")" + class + " — the link dropped while the firmware was building the login packet (ECDH/crypto), before the transmit was queued. Run the advert self-test (mode=advert): its post-TX liveness check tells you whether a bare RF transmit also resets this device (→ RF/power/firmware TX) or only secure requests do (→ login/crypto path)."
 	case strings.Contains(msg, "after RESP_CODE_SENT"):
 		// RESP_CODE_SENT arrived → packet built OK; drop is during/after TX.
-		return "companion dropped AFTER RESP_CODE_SENT, in the transmit+reply window (" + msg + ") — RESP_CODE_SENT arrived, so packet build succeeded; the link died while the packet was actually on the air (login holds the serial session open the whole ~2s, which is when the reset surfaces). Run the advert self-test: if its post-TX liveness check also fails, ANY RF transmit resets the device (power/PA draw or firmware TX handling); if it passes, the fault is specific to the login/secure-request path."
+		return "companion dropped AFTER RESP_CODE_SENT, in the transmit+reply window (" + msg + ")" + class + " — RESP_CODE_SENT arrived, so packet build succeeded; the link died while the packet was actually on the air. Run the advert self-test: if its post-TX liveness check also fails, ANY RF transmit resets the device; if it passes, the fault is specific to the login/secure-request path."
 	default:
-		return "companion USB disconnected during login (" + msg + ") — only one process may own the tty. Run the advert self-test (post-TX liveness check) to tell whether ANY RF transmit resets the device or only the login/secure-request path — don't assume from a command that returned before the transmit ran."
+		return "companion USB disconnected during login (" + msg + ")" + class + " — only one process may own the tty. Run the advert self-test (post-TX liveness check) to tell whether ANY RF transmit resets the device or only the login/secure-request path — don't assume from a command that returned before the transmit ran."
 	}
 }
 
@@ -777,6 +814,17 @@ func envDuration(k string, def time.Duration) time.Duration {
 		return def
 	}
 	return d
+}
+
+func envBool(k string, def bool) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(k))) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return def
+	}
 }
 
 type configAPIKey struct {
