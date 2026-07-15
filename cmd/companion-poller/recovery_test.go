@@ -56,3 +56,26 @@ func TestCDCHangupCooldownConfigured(t *testing.T) {
 		t.Fatalf("cdcHangupCooldown=%s; want >=1s to let the ACM endpoint settle", cdcHangupCooldown)
 	}
 }
+
+func TestChooseContactRoute(t *testing.T) {
+	cases := []struct {
+		name       string
+		known      bool
+		outPathLen int
+		want       routeAction
+	}{
+		{"missing → seed flood", false, 0, routeSeedFlood},
+		{"known flood → leave", true, 0xFF, routeLeave},
+		{"known 1-hop → leave", true, 1, routeLeave},
+		{"known 3-hop → leave", true, 3, routeLeave},
+		{"known zero-hop → restore flood", true, 0, routeRestoreFlood},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := chooseContactRoute(tc.known, tc.outPathLen); got != tc.want {
+				t.Fatalf("chooseContactRoute(%v,%d)=%v want %v (%s)",
+					tc.known, tc.outPathLen, got, tc.want, routeActionLabel(tc.want))
+			}
+		})
+	}
+}

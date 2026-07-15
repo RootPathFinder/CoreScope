@@ -252,29 +252,23 @@ func pollOnce(vault *repeatervault.Store, status *companion.StatusStore, serialP
 		}
 
 		ct, known := byKey[pkLower]
-		// Flood (path unknown) brownouts weak USB; force zero-hop for poller-managed contacts.
-		// Keep a learned direct path (1–64) when the companion has heard an advert.
-		needZeroHop := !known || ct.OutPathLen == companion.OutPathUnknown
+		outPathLen := 0
 		if known {
-			pathNote := "path unknown (will force zero-hop)"
-			if ct.OutPathLen != companion.OutPathUnknown {
-				pathNote = fmt.Sprintf("out_path_len=%d", ct.OutPathLen)
-			}
-			log.Printf("poll %s (%s): companion contact OK name=%q type=%s %s",
-				short(r.PublicKey), r.Name, ct.Name, ct.TypeLabel, pathNote)
+			outPathLen = ct.OutPathLen
+		}
+		route := chooseContactRoute(known, outPathLen)
+		if known {
+			log.Printf("poll %s (%s): companion contact OK name=%q type=%s out_path_len=%d → %s",
+				short(r.PublicKey), r.Name, ct.Name, ct.TypeLabel, ct.OutPathLen, routeActionLabel(route))
 			if seedName == short(r.PublicKey) && ct.Name != "" {
 				seedName = ct.Name
 			}
 		}
 
-		if needZeroHop {
-			action := "seeding"
-			if known {
-				action = "forcing zero-hop path on"
-			}
-			log.Printf("poll %s (%s): %s companion contact via CMD_ADD_UPDATE_CONTACT (out_path_len=0)",
-				short(r.PublicKey), r.Name, action)
-			if err := ensureContact(link, serialPath, baud, status, r.PublicKey, seedName); err != nil {
+		if route != routeLeave {
+			log.Printf("poll %s (%s): %s via CMD_ADD_UPDATE_CONTACT",
+				short(r.PublicKey), r.Name, routeActionLabel(route))
+			if err := ensureContact(link, serialPath, baud, status, r.PublicKey, seedName, companion.OutPathUnknown); err != nil {
 				snap.OK = false
 				snap.Error = disconnectHint(err)
 				snap.DurationMs = time.Since(start).Milliseconds()
@@ -291,7 +285,7 @@ func pollOnce(vault *repeatervault.Store, status *companion.StatusStore, serialP
 				Name:       seedName,
 				Type:       companion.AdvTypeRepeater,
 				TypeLabel:  "repeater",
-				OutPathLen: companion.OutPathZeroHop,
+				OutPathLen: int(companion.OutPathUnknown),
 			}
 			byKey[pkLower] = seeded
 			if !known {
@@ -306,7 +300,7 @@ func pollOnce(vault *repeatervault.Store, status *companion.StatusStore, serialP
 			}
 			contactsDirty = true
 			known = true
-			log.Printf("poll %s (%s): companion contact ready (zero-hop) name=%q", short(r.PublicKey), r.Name, seedName)
+			log.Printf("poll %s (%s): companion contact ready (flood) name=%q", short(r.PublicKey), r.Name, seedName)
 		}
 
 		pass, err := vault.DecryptAdminPassword(r.PublicKey)
@@ -323,7 +317,22 @@ func pollOnce(vault *repeatervault.Store, status *companion.StatusStore, serialP
 		// firmware predates CMD_GET_STATS.
 		uptimeBefore := readUptime(link)
 
-		login, st, err := link.client.LoginAndStatus(r.PublicKey, pass, timeout)
+		// Happy path (RemoteTerm model): try StatusOnly first. After an earlier
+		// successful login the repeater keeps us in ACL; re-login every cycle is
+		// what hangs the USB CDC. Only LoginAndStatus when status fails.
+		var login companion.LoginPush
+		st, err := link.client.StatusOnly(r.PublicKey, timeout)
+		if err == nil {
+			login.OK = true
+			login.IsAdmin = true
+			log.Printf("poll %s (%s): status-only OK (session reused — skipped login)", short(r.PublicKey), r.Name)
+		} else if companion.IsDisconnected(err) {
+			// Fall through to shared disconnect recovery below (treat like login drop).
+		} else {
+			log.Printf("poll %s (%s): status-only missed (%v) — logging in", short(r.PublicKey), r.Name, err)
+			login, st, err = link.client.LoginAndStatus(r.PublicKey, pass, timeout)
+		}
+
 		if companion.IsDisconnected(err) {
 			dropErr := err
 			link.close()
@@ -343,28 +352,21 @@ func pollOnce(vault *repeatervault.Store, status *companion.StatusStore, serialP
 			logRebootEvidence(link, uptimeBefore, ctx)
 			logSessionProbe(link, r.PublicKey, ctx) // informational only (keep_alive=0 → usually false)
 
-			// Prefer StatusOnly after any login disconnect. If the RF login
-			// actually landed (common when we got RESP_CODE_SENT before the CDC
-			// hangup), the repeater already has us in ACL and status works
-			// without another ECDH/login that would just hang the CDC again.
+			// Prefer StatusOnly after any secure-request disconnect. If a prior
+			// login landed on-air, the repeater already has us in ACL.
 			log.Printf("%s: trying status-only recovery after CDC hangup (queued=%v)", ctx, loginQueuedBeforeDrop(dropErr))
 			st, err = link.client.StatusOnly(r.PublicKey, timeout)
 			if err == nil {
 				login.OK = true
 				login.IsAdmin = true
-				log.Printf("%s: status-only recovery OK — login succeeded on-air; only the USB reply was lost", ctx)
+				log.Printf("%s: status-only recovery OK — ACL session usable; only the USB reply was lost", ctx)
 			} else if companion.IsDisconnected(err) {
-				// CDC still flaky — do NOT immediately re-login (that storms the
-				// link). Cooldown and let the skip/reconnect path settle.
 				log.Printf("%s: status-only also hit CDC hangup — cooling down %s before next secure command", ctx, cdcHangupCooldown)
 				time.Sleep(cdcHangupCooldown)
 			} else {
-				// Status failed for a non-disconnect reason (timeout / not
-				// authorized / etc.) — login likely never landed; re-login once
-				// after a cooldown so the ACM endpoint can settle.
-				log.Printf("%s: status-only failed (%v) — cooling down %s then retrying login", ctx, err, cdcHangupCooldown)
+				log.Printf("%s: status-only failed (%v) — cooling down %s then logging in (flood path)", ctx, err, cdcHangupCooldown)
 				time.Sleep(cdcHangupCooldown)
-				_ = link.client.AddOrUpdateContact(r.PublicKey, companion.AdvTypeRepeater, seedName, companion.OutPathZeroHop, 5*time.Second)
+				_ = link.client.AddOrUpdateContact(r.PublicKey, companion.AdvTypeRepeater, seedName, companion.OutPathUnknown, 5*time.Second)
 				login, st, err = link.client.LoginAndStatus(r.PublicKey, pass, timeout)
 			}
 		}
@@ -719,9 +721,11 @@ func runConfigApply(req *companion.ConfigRequest, status *companion.StatusStore,
 	return finish()
 }
 
-// ensureContact adds/updates a vaulted repeater as a zero-hop companion contact.
-func ensureContact(link *liveLink, serialPath string, baud int, status *companion.StatusStore, pubKey, name string) error {
-	err := link.client.AddOrUpdateContact(pubKey, companion.AdvTypeRepeater, name, companion.OutPathZeroHop, 5*time.Second)
+// ensureContact adds/updates a vaulted repeater as a companion contact with the
+// given out_path_len (OutPathUnknown=flood for multi-hop meshes; never force
+// zero-hop — most managed repeaters are not RF-adjacent to the USB companion).
+func ensureContact(link *liveLink, serialPath string, baud int, status *companion.StatusStore, pubKey, name string, outPathLen uint8) error {
+	err := link.client.AddOrUpdateContact(pubKey, companion.AdvTypeRepeater, name, outPathLen, 5*time.Second)
 	if err == nil {
 		return nil
 	}
@@ -736,7 +740,7 @@ func ensureContact(link *liveLink, serialPath string, baud int, status *companio
 	}
 	*link = *re
 	_ = status.SetCompanion(link.info)
-	return link.client.AddOrUpdateContact(pubKey, companion.AdvTypeRepeater, name, companion.OutPathZeroHop, 5*time.Second)
+	return link.client.AddOrUpdateContact(pubKey, companion.AdvTypeRepeater, name, outPathLen, 5*time.Second)
 }
 
 // readUptime returns the companion's current uptime in seconds, or 0 if the
