@@ -283,6 +283,12 @@ func pollOnce(vault *repeatervault.Store, status *companion.StatusStore, serialP
 			continue
 		}
 
+		// Baseline the companion uptime right before the secure request so a
+		// disconnect can be proven to be a real MCU reboot (uptime → ~0) rather
+		// than a USB CDC hiccup (uptime keeps climbing). Best-effort: 0 if the
+		// firmware predates CMD_GET_STATS.
+		uptimeBefore := readUptime(link)
+
 		login, st, err := link.client.LoginAndStatus(r.PublicKey, pass, timeout)
 		if companion.IsDisconnected(err) {
 			link.close()
@@ -298,6 +304,7 @@ func pollOnce(vault *repeatervault.Store, status *companion.StatusStore, serialP
 			}
 			link = re
 			_ = status.SetCompanion(link.info)
+			logRebootEvidence(link, uptimeBefore, fmt.Sprintf("poll %s (%s)", short(r.PublicKey), r.Name))
 			// Re-assert zero-hop after reconnect — contact table may still say flood.
 			_ = link.client.AddOrUpdateContact(r.PublicKey, companion.AdvTypeRepeater, seedName, companion.OutPathZeroHop, 5*time.Second)
 			log.Printf("poll %s (%s): retrying zero-hop login after reconnect", short(r.PublicKey), r.Name)
@@ -321,6 +328,7 @@ func pollOnce(vault *repeatervault.Store, status *companion.StatusStore, serialP
 				}
 				link = re
 				_ = status.SetCompanion(link.info)
+				logRebootEvidence(link, uptimeBefore, fmt.Sprintf("poll %s (%s)", short(r.PublicKey), r.Name))
 				continue
 			case errors.Is(err, companion.ErrNotFound):
 				snap.Error = companion.NotFoundHint(r.PublicKey, contacts)
@@ -455,6 +463,16 @@ func runUSBSelfTest(req *companion.TestRequest, status *companion.StatusStore, s
 		res.AddStep("battery", true, fmt.Sprintf("%dmV storage=%d/%dkB", batt.BatteryMv, batt.StorageUsedKb, batt.StorageTotKb))
 	}
 
+	// core_stats → uptime (best-effort; v8+ firmware). Baseline for reset proof.
+	var uptimeBefore uint32
+	if cs, cerr := link.client.GetCoreStats(5 * time.Second); cerr != nil {
+		res.AddStep("core_stats", false, cerr.Error())
+	} else {
+		uptimeBefore = cs.UptimeSecs
+		res.UptimeSecs = cs.UptimeSecs
+		res.AddStep("core_stats", true, fmt.Sprintf("uptime=%ds batt=%dmV errFlags=0x%04x queue=%d", cs.UptimeSecs, cs.BatteryMv, cs.ErrFlags, cs.QueueLen))
+	}
+
 	// get_contacts (required; proves streamed multi-frame protocol works).
 	contacts, reported, cerr := link.client.GetContacts(30 * time.Second)
 	link.info.ContactCount = len(contacts)
@@ -512,6 +530,21 @@ func runUSBSelfTest(req *companion.TestRequest, status *companion.StatusStore, s
 			detail = "device responsive after advert RF transmit (liveness probe note: " + probeErr.Error() + ")"
 		}
 		res.AddStep("post_advert_alive", true, detail)
+
+		// Uptime proof: if the MCU had silently rebooted during the advert TX,
+		// uptime would run backwards. Confirms the "survived TX" claim with a
+		// hard number rather than just a responsive probe.
+		if uptimeBefore > 0 {
+			uptimeAfter := readUptime(link)
+			switch {
+			case uptimeAfter == 0:
+				res.AddStep("uptime_check", true, fmt.Sprintf("uptime unreadable after advert (was %ds) — probe alive, but no uptime confirmation", uptimeBefore))
+			case companion.UptimeIndicatesReboot(uptimeBefore, uptimeAfter):
+				res.AddStep("uptime_check", false, fmt.Sprintf("REBOOT during advert TX — uptime %ds → %ds (ran backwards)", uptimeBefore, uptimeAfter))
+			default:
+				res.AddStep("uptime_check", true, fmt.Sprintf("no reboot — uptime %ds → %ds (kept climbing across the advert TX)", uptimeBefore, uptimeAfter))
+			}
+		}
 	}
 
 	res.OK = true
@@ -639,6 +672,40 @@ func ensureContact(link *liveLink, serialPath string, baud int, status *companio
 	*link = *re
 	_ = status.SetCompanion(link.info)
 	return link.client.AddOrUpdateContact(pubKey, companion.AdvTypeRepeater, name, companion.OutPathZeroHop, 5*time.Second)
+}
+
+// readUptime returns the companion's current uptime in seconds, or 0 if the
+// firmware does not support CMD_GET_STATS or the query fails. Best-effort.
+func readUptime(link *liveLink) uint32 {
+	if link == nil || link.client == nil {
+		return 0
+	}
+	cs, err := link.client.GetCoreStats(2 * time.Second)
+	if err != nil {
+		return 0
+	}
+	return cs.UptimeSecs
+}
+
+// logRebootEvidence reads the companion uptime after a reconnect and logs
+// definitive proof of whether the MCU rebooted (uptime ran backwards) or the
+// USB CDC link merely hiccupped (uptime kept climbing). A zero baseline means
+// we never got a reading (older firmware) and cannot prove it either way.
+func logRebootEvidence(link *liveLink, before uint32, ctx string) {
+	if before == 0 {
+		log.Printf("%s: uptime baseline unavailable (firmware may predate CMD_GET_STATS) — cannot prove reboot vs USB hiccup", ctx)
+		return
+	}
+	after := readUptime(link)
+	if after == 0 {
+		log.Printf("%s: uptime unreadable after reconnect — cannot confirm reboot", ctx)
+		return
+	}
+	if companion.UptimeIndicatesReboot(before, after) {
+		log.Printf("%s: DEVICE REBOOT CONFIRMED — companion uptime %ds → %ds (ran backwards). The MCU actually reset during the secure request; this is a real reboot, not a USB CDC glitch.", ctx, before, after)
+		return
+	}
+	log.Printf("%s: NO reboot — companion uptime %ds → %ds (kept climbing). The USB CDC link dropped but the MCU stayed up; look at the host USB stack, not firmware TX.", ctx, before, after)
 }
 
 func disconnectHint(err error) string {

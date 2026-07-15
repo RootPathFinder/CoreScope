@@ -74,6 +74,7 @@ type TestResult struct {
 	Self         *SelfInfo    `json:"self,omitempty"`    // from CMD_APP_START
 	Battery      *BattStorage `json:"battery,omitempty"` // from CMD_GET_BATT_AND_STORAGE
 	AdvertSent   bool         `json:"advertSent,omitempty"`
+	UptimeSecs   uint32       `json:"uptimeSecs,omitempty"` // from CMD_GET_STATS (before advert TX)
 }
 
 // AddStep appends a diagnostic step to the result.

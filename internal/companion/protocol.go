@@ -24,6 +24,7 @@ const (
 	CmdSendStatusReq    byte = 0x1B
 	CmdLogout           byte = 0x1D
 	CmdSendTelemetry    byte = 0x27
+	CmdGetStats         byte = 0x38 // CMD_GET_STATS (v8+; byte1 = stats type)
 
 	RespOK            byte = 0x00
 	RespError         byte = 0x01
@@ -34,6 +35,9 @@ const (
 	RespMsgSent       byte = 0x06
 	RespBattStorage   byte = 0x0C // RESP_CODE_BATT_AND_STORAGE
 	RespDeviceInfo    byte = 0x0D
+	RespStats         byte = 0x18 // RESP_CODE_STATS (v8+; byte1 = stats type)
+
+	StatsTypeCore byte = 0x00 // STATS_TYPE_CORE: battery, uptime, err flags, queue len
 
 	PushLoginSuccess   byte = 0x85
 	PushLoginFail      byte = 0x86
@@ -149,6 +153,43 @@ func BuildSelfAdvert(flood bool) []byte {
 		b = 1
 	}
 	return []byte{CmdSendSelfAdvert, b}
+}
+
+// BuildGetCoreStats builds CMD_GET_STATS with STATS_TYPE_CORE. The reply
+// (RESP_CODE_STATS) carries the device uptime — reading it before and after a
+// suspected reset proves whether the MCU actually rebooted (uptime resets to ~0)
+// or the USB CDC link merely hiccupped (uptime keeps climbing). v8+ firmware.
+func BuildGetCoreStats() []byte {
+	return []byte{CmdGetStats, StatsTypeCore}
+}
+
+// CoreStats is the parsed RESP_CODE_STATS / STATS_TYPE_CORE payload.
+type CoreStats struct {
+	BatteryMv  uint16 `json:"batteryMv"`
+	UptimeSecs uint32 `json:"uptimeSecs"`
+	ErrFlags   uint16 `json:"errFlags"`
+	QueueLen   uint8  `json:"queueLen"`
+}
+
+// ParseCoreStats parses RESP_CODE_STATS (STATS_TYPE_CORE). Layout (after the
+// two type bytes): battery_mv(2) + uptime_secs(4) + err_flags(2) + queue_len(1).
+func ParseCoreStats(frame []byte) (CoreStats, error) {
+	var s CoreStats
+	// code(1)+type(1)+batt(2)+uptime(4)+errflags(2)+queue(1) = 11
+	if len(frame) < 11 || frame[0] != RespStats || frame[1] != StatsTypeCore {
+		return s, ErrProtocol
+	}
+	s.BatteryMv = binary.LittleEndian.Uint16(frame[2:4])
+	s.UptimeSecs = binary.LittleEndian.Uint32(frame[4:8])
+	s.ErrFlags = binary.LittleEndian.Uint16(frame[8:10])
+	s.QueueLen = frame[10]
+	return s, nil
+}
+
+// UptimeIndicatesReboot reports whether the device rebooted between two uptime
+// samples. Uptime running backwards is unambiguous proof of a reset.
+func UptimeIndicatesReboot(before, after uint32) bool {
+	return after < before
 }
 
 // DeviceInfo is the parsed RESP_CODE_DEVICE_INFO (reply to CMD_DEVICE_QUERY).
