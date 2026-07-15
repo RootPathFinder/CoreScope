@@ -68,7 +68,9 @@ func TestChooseContactRoute(t *testing.T) {
 		{"known flood → leave", true, 0xFF, routeLeave},
 		{"known 1-hop → leave", true, 1, routeLeave},
 		{"known 3-hop → leave", true, 3, routeLeave},
-		{"known zero-hop → restore flood", true, 0, routeRestoreFlood},
+		// path_len=0 is often a LEARNED direct path after a flood TX; must not
+		// thrash it back to flood every cycle (that re-triggered CDC hangups).
+		{"known zero-hop → leave", true, 0, routeLeave},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

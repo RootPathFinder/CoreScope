@@ -3,8 +3,6 @@ package main
 import (
 	"strings"
 	"time"
-
-	"github.com/meshcore-analyzer/companion"
 )
 
 // cdcHangupCooldown is how long to wait after a bare-EOF CDC hangup before
@@ -41,31 +39,28 @@ func sessionProbeMessage(connected bool, ctx string) string {
 type routeAction int
 
 const (
-	// routeLeave keeps the companion's existing out_path (learned multi-hop or flood).
+	// routeLeave keeps the companion's existing out_path (learned multi-hop,
+	// zero-hop/direct, or flood). Never thrash a path the radio already has.
 	routeLeave routeAction = iota
 	// routeSeedFlood adds a missing contact with OUT_PATH_UNKNOWN so login can flood.
 	routeSeedFlood
-	// routeRestoreFlood rewrites a forced zero-hop path back to OUT_PATH_UNKNOWN.
-	// Most managed repeaters are not RF-adjacent; zero-hop was a mistaken brownout
-	// mitigation that made multi-hop logins unreachable.
-	routeRestoreFlood
 )
 
 // chooseContactRoute decides path handling for a managed repeater.
 //
-// Policy (matches RemoteTerm / meshcore_py practice):
-//   - missing contact → seed as flood (0xFF), never zero-hop
-//   - known with learned hops (1–64) → leave alone
-//   - known with flood (0xFF) → leave alone
-//   - known with path_len=0 → restore flood (we previously forced this on every
-//     unknown-path contact; most managed repeaters are not zero-hop reachable)
+// Policy:
+//   - missing contact → seed as flood (0xFF) so multi-hop targets are reachable
+//   - known with any path (0, 1–64, or 255) → leave alone
+//
+// Importantly, path_len=0 must NOT be rewritten to flood. After a flood TX the
+// companion often learns a direct (0-hop) return path; thrashing that back to
+// flood every cycle was undoing path learning and forcing another flood TX
+// (which hangs this host's USB CDC).
 func chooseContactRoute(known bool, outPathLen int) routeAction {
 	if !known {
 		return routeSeedFlood
 	}
-	if outPathLen == int(companion.OutPathZeroHop) {
-		return routeRestoreFlood
-	}
+	_ = outPathLen
 	return routeLeave
 }
 
@@ -73,8 +68,6 @@ func routeActionLabel(a routeAction) string {
 	switch a {
 	case routeSeedFlood:
 		return "seed flood (out_path_len=255)"
-	case routeRestoreFlood:
-		return "restore flood path (was zero-hop; most managed repeaters are multi-hop)"
 	default:
 		return "leave existing path"
 	}
