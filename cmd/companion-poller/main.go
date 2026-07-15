@@ -475,22 +475,43 @@ func runUSBSelfTest(req *companion.TestRequest, status *companion.StatusStore, s
 	_ = status.SetContacts(link.info, contacts)
 
 	// Optional RF TX: a single zero-hop self-advert to test transmit in isolation.
+	// RESP_CODE_OK only means the command was accepted; the transmit runs after.
+	// So we wait out the airtime and re-probe the device — otherwise a TX-triggered
+	// reset (the exact thing login hits) would go unobserved and we'd falsely
+	// report "advert works".
 	if mode == companion.TestModeAdvert {
-		if aerr := link.client.SendSelfAdvert(false, 10*time.Second); aerr != nil {
+		const advertSettle = 4 * time.Second
+		alive, probeErr, aerr := link.client.SelfAdvertAndProbe(false, advertSettle, 5*time.Second)
+		if aerr != nil {
 			res.AddStep("self_advert", false, aerr.Error())
 			link.info.OK = false
 			link.info.LastError = "self_advert: " + aerr.Error()
 			_ = status.SetCompanion(link.info)
 			res.OK = false
 			if companion.IsDisconnected(aerr) {
-				res.Error = disconnectHint(aerr) + " — reproduced by a bare zero-hop self-advert (no login/password/contact), so the drop is RF-TX-triggered, not a command/protocol issue."
+				res.Error = "companion dropped while accepting a bare zero-hop self-advert (" + aerr.Error() + ") — the link failed before the transmit even ran, so this is a serial/handshake fault, not RF airtime."
 			} else {
 				res.Error = "self_advert: " + aerr.Error()
 			}
 			return finish()
 		}
 		res.AdvertSent = true
-		res.AddStep("self_advert", true, "zero-hop advert accepted (RESP_CODE_OK)")
+		res.AddStep("self_advert", true, "zero-hop advert accepted (RESP_CODE_OK) — command queued, RF transmit pending")
+
+		if !alive {
+			res.AddStep("post_advert_alive", false, probeErr.Error())
+			link.info.OK = false
+			link.info.LastError = "post_advert: " + probeErr.Error()
+			_ = status.SetCompanion(link.info)
+			res.OK = false
+			res.Error = "companion reset AFTER a bare zero-hop self-advert RF transmit (" + probeErr.Error() + ") — it accepted the command (RESP_CODE_OK) but dropped the USB link once the transmit physically ran. This is RF-TX-triggered (PA current draw or firmware TX handling), NOT login-specific: a plain advert with no login/password/contact reproduces it. Try lowering TX power via radio config, a powered USB hub / shorter cable, or updating companion firmware."
+			return finish()
+		}
+		detail := "device still responsive after advert RF transmit — a bare RF TX does NOT reset this device (points at the login/secure-request path, not raw TX)"
+		if probeErr != nil {
+			detail = "device responsive after advert RF transmit (liveness probe note: " + probeErr.Error() + ")"
+		}
+		res.AddStep("post_advert_alive", true, detail)
 	}
 
 	res.OK = true
@@ -627,13 +648,13 @@ func disconnectHint(err error) string {
 	}
 	switch {
 	case strings.Contains(msg, "no RESP_CODE_SENT"):
-		// Reset happened before RESP_CODE_SENT → before any RF transmit.
-		return "companion reset BEFORE transmitting (" + msg + ") — the link dropped while the firmware was building the login packet (ECDH/crypto), before any RF TX was dispatched. A zero-hop self-advert TX succeeds on this device, so this is a firmware crash on CMD_SEND_LOGIN, NOT USB power or antenna. Try: update companion firmware, confirm the repeater's public key is valid, and report the crash upstream if it persists."
+		// Reset happened before RESP_CODE_SENT → before the transmit was queued.
+		return "companion reset BEFORE RESP_CODE_SENT (" + msg + ") — the link dropped while the firmware was building the login packet (ECDH/crypto), before the transmit was queued. Run the advert self-test (mode=advert): its post-TX liveness check tells you whether a bare RF transmit also resets this device (→ RF/power/firmware TX) or only secure requests do (→ login/crypto path)."
 	case strings.Contains(msg, "after RESP_CODE_SENT"):
 		// RESP_CODE_SENT arrived → packet built OK; drop is during/after TX.
-		return "companion dropped DURING/AFTER the login RF transmit (" + msg + ") — RESP_CODE_SENT arrived, so packet build succeeded. Since a zero-hop self-advert TX works but login does not, suspect login-packet airtime/power draw or firmware TX handling for secure requests (not the command format)."
+		return "companion dropped AFTER RESP_CODE_SENT, in the transmit+reply window (" + msg + ") — RESP_CODE_SENT arrived, so packet build succeeded; the link died while the packet was actually on the air (login holds the serial session open the whole ~2s, which is when the reset surfaces). Run the advert self-test: if its post-TX liveness check also fails, ANY RF transmit resets the device (power/PA draw or firmware TX handling); if it passes, the fault is specific to the login/secure-request path."
 	default:
-		return "companion USB disconnected during login (" + msg + ") — only one process may own the tty. A zero-hop self-advert TX works on this device, so the read path and basic RF TX are fine; focus on the login/secure-request path."
+		return "companion USB disconnected during login (" + msg + ") — only one process may own the tty. Run the advert self-test (post-TX liveness check) to tell whether ANY RF transmit resets the device or only the login/secure-request path — don't assume from a command that returned before the transmit ran."
 	}
 }
 
