@@ -100,7 +100,9 @@ func WrapSerialErr(err error) error {
 		return err
 	}
 	if IsDisconnected(err) {
-		return fmt.Errorf("%w: %v", ErrDisconnected, err)
+		// Keep the underlying error in the chain (multi-%w) so callers can still
+		// errors.As it to a syscall.Errno / io.EOF for precise classification.
+		return fmt.Errorf("%w: %w", ErrDisconnected, err)
 	}
 	return err
 }
