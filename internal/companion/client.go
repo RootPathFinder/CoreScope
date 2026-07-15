@@ -105,6 +105,38 @@ func (c *Client) GetCoreStats(timeout time.Duration) (CoreStats, error) {
 	return ParseCoreStats(frame)
 }
 
+// HasConnection sends CMD_HAS_CONNECTION and reports whether the companion
+// holds an active login session to the contact. Returns (true,nil) on
+// RESP_CODE_OK, (false,nil) when the firmware reports no session (RESP_CODE_ERR),
+// and (false,err) only for a real serial disconnect/timeout. After a login whose
+// serial reply was lost, this tells us the login actually succeeded device-side.
+func (c *Client) HasConnection(pubKeyHex string, timeout time.Duration) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	pk, err := DecodePubKey(pubKeyHex)
+	if err != nil {
+		return false, err
+	}
+	frame, err := BuildHasConnection(pk)
+	if err != nil {
+		return false, err
+	}
+	if err := WriteFrame(c.port, frame); err != nil {
+		return false, err
+	}
+	if _, err := c.awaitResp(RespOK, timeout); err != nil {
+		if IsDisconnected(err) {
+			return false, err
+		}
+		// RESP_CODE_ERR (e.g. NOT_FOUND) or timeout → simply no active session.
+		return false, nil
+	}
+	return true, nil
+}
+
 // GetBattStorage sends CMD_GET_BATT_AND_STORAGE and returns battery mV + storage.
 func (c *Client) GetBattStorage(timeout time.Duration) (BattStorage, error) {
 	c.mu.Lock()
@@ -284,18 +316,42 @@ func (c *Client) LoginAndStatus(pubKeyHex, password string, timeout time.Duratio
 		return login, status, ErrLoginFailed
 	}
 
+	status, err = c.statusReqLocked(pk, timeout)
+	if err != nil {
+		return login, status, err
+	}
+	return login, status, nil
+}
+
+// StatusOnly requests repeater status assuming the companion already holds an
+// active login session (e.g. a prior login succeeded device-side but its serial
+// reply was lost to a USB drop). Skips the login round-trip entirely.
+func (c *Client) StatusOnly(pubKeyHex string, timeout time.Duration) (StatusPush, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	pk, err := DecodePubKey(pubKeyHex)
+	if err != nil {
+		return StatusPush{}, err
+	}
+	return c.statusReqLocked(pk, timeout)
+}
+
+// statusReqLocked sends CMD_SEND_STATUS_REQ and awaits the status push.
+// Caller must hold c.mu.
+func (c *Client) statusReqLocked(pk []byte, timeout time.Duration) (StatusPush, error) {
+	var status StatusPush
 	statusFrame, err := BuildStatusReq(pk)
 	if err != nil {
-		return login, status, err
+		return status, err
 	}
 	if err := WriteFrame(c.port, statusFrame); err != nil {
-		return login, status, err
+		return status, err
 	}
-	ack, err = c.waitSentOrErr(timeout)
+	ack, err := c.waitSentOrErr(timeout)
 	if err != nil {
-		return login, status, fmt.Errorf("status_req: no RESP_CODE_SENT after successful login (pre-TX reset): %w", err)
+		return status, fmt.Errorf("status_req: no RESP_CODE_SENT (pre-TX reset): %w", err)
 	}
-	wait = ack.SuggestedTimeout
+	wait := ack.SuggestedTimeout
 	if wait < 2*time.Second {
 		wait = 2 * time.Second
 	}
@@ -304,9 +360,9 @@ func (c *Client) LoginAndStatus(pubKeyHex, password string, timeout time.Duratio
 	}
 	status, err = c.waitStatusPush(wait)
 	if err != nil {
-		return login, status, fmt.Errorf("status_req: dropped after RESP_CODE_SENT (%s, est %s) awaiting reply: %w", ackRouting(ack), ack.SuggestedTimeout, err)
+		return status, fmt.Errorf("status_req: dropped after RESP_CODE_SENT (%s, est %s) awaiting reply: %w", ackRouting(ack), ack.SuggestedTimeout, err)
 	}
-	return login, status, nil
+	return status, nil
 }
 
 // ackRouting labels how the firmware queued the request (flood vs direct).
