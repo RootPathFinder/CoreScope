@@ -85,6 +85,26 @@ func (c *Client) QueryDeviceInfo(timeout time.Duration) (DeviceInfo, error) {
 	return ParseDeviceInfo(frame)
 }
 
+// GetCoreStats sends CMD_GET_STATS (STATS_TYPE_CORE) and returns the device
+// uptime + battery + error flags. Reading uptime before and after a suspected
+// reset is the definitive way to prove the MCU rebooted vs. a CDC hiccup.
+// Requires v8+ firmware; older devices reply RESP_CODE_ERR (unsupported).
+func (c *Client) GetCoreStats(timeout time.Duration) (CoreStats, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	if err := WriteFrame(c.port, BuildGetCoreStats()); err != nil {
+		return CoreStats{}, err
+	}
+	frame, err := c.awaitResp(RespStats, timeout)
+	if err != nil {
+		return CoreStats{}, err
+	}
+	return ParseCoreStats(frame)
+}
+
 // GetBattStorage sends CMD_GET_BATT_AND_STORAGE and returns battery mV + storage.
 func (c *Client) GetBattStorage(timeout time.Duration) (BattStorage, error) {
 	c.mu.Lock()

@@ -623,6 +623,73 @@ func TestClientSendSelfAdvertError(t *testing.T) {
 	}
 }
 
+func TestParseCoreStats(t *testing.T) {
+	// code(1)+type(1)+batt(2)+uptime(4)+errflags(2)+queue(1)
+	frame := make([]byte, 11)
+	frame[0] = RespStats
+	frame[1] = StatsTypeCore
+	binary.LittleEndian.PutUint16(frame[2:4], 4226)
+	binary.LittleEndian.PutUint32(frame[4:8], 123456)
+	binary.LittleEndian.PutUint16(frame[8:10], 0x0002)
+	frame[10] = 3
+	cs, err := ParseCoreStats(frame)
+	if err != nil {
+		t.Fatalf("ParseCoreStats: %v", err)
+	}
+	if cs.BatteryMv != 4226 || cs.UptimeSecs != 123456 || cs.ErrFlags != 0x0002 || cs.QueueLen != 3 {
+		t.Fatalf("core stats=%+v", cs)
+	}
+
+	// Wrong type / short frames must error, not panic.
+	if _, err := ParseCoreStats([]byte{RespStats, 0x01, 0, 0}); err == nil {
+		t.Fatal("expected error for wrong stats type")
+	}
+	if _, err := ParseCoreStats([]byte{RespStats}); err == nil {
+		t.Fatal("expected error for short frame")
+	}
+}
+
+func TestUptimeIndicatesReboot(t *testing.T) {
+	if !UptimeIndicatesReboot(1000, 5) {
+		t.Fatal("uptime going backwards must indicate reboot")
+	}
+	if UptimeIndicatesReboot(1000, 1004) {
+		t.Fatal("climbing uptime must NOT indicate reboot")
+	}
+	if UptimeIndicatesReboot(1000, 1000) {
+		t.Fatal("equal uptime is not proof of reboot")
+	}
+}
+
+func TestClientGetCoreStats(t *testing.T) {
+	stats := make([]byte, 11)
+	stats[0] = RespStats
+	stats[1] = StatsTypeCore
+	binary.LittleEndian.PutUint32(stats[4:8], 777)
+	port := &scriptedPort{reads: [][][]byte{{stats}}}
+	c := NewClient(port, "diag")
+	cs, err := c.GetCoreStats(time.Second)
+	if err != nil {
+		t.Fatalf("GetCoreStats: %v", err)
+	}
+	if cs.UptimeSecs != 777 {
+		t.Fatalf("uptime=%d", cs.UptimeSecs)
+	}
+
+	if got := BuildGetCoreStats(); len(got) != 2 || got[0] != CmdGetStats || got[1] != StatsTypeCore {
+		t.Fatalf("BuildGetCoreStats=%x", got)
+	}
+}
+
+func TestClientGetCoreStatsUnsupported(t *testing.T) {
+	// Older firmware replies RESP_CODE_ERR (unsupported) — must surface an error.
+	port := &scriptedPort{reads: [][][]byte{{{RespError, 0x02}}}}
+	c := NewClient(port, "diag")
+	if _, err := c.GetCoreStats(time.Second); err == nil {
+		t.Fatal("expected error on unsupported CMD_GET_STATS")
+	}
+}
+
 func TestSelfAdvertAndProbe_SurvivesTX(t *testing.T) {
 	// advert accepted (RESP_CODE_OK), then DEVICE_QUERY answers → device alive.
 	dev := make([]byte, 82)
